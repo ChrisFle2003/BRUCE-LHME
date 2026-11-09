@@ -104,7 +104,7 @@ TEST(kevin_store_enforces_grid_and_caller_budgets_for_overrides) {
   CHECK(limited.result.status == Status::BudgetExceeded);
 }
 
-TEST(kevin_store_respects_the_engine_run_gate_for_computed_values) {
+TEST(kevin_store_ignores_idle_engine_cancellation_for_computed_values) {
   auto engine = configured_engine();
   KevinMemoryStore store{engine};
   const auto power = power_spec();
@@ -112,8 +112,8 @@ TEST(kevin_store_respects_the_engine_run_gate_for_computed_values) {
   engine.cancel();
   const auto result = store.get(power.identity, address(1, 1),
                                 EvaluationMode::Exact, Budget::unlimited());
-  CHECK(result.result.status == Status::Cancelled);
-  CHECK(!result.result.integer.has_value());
+  CHECK(result.result.status == Status::Confirmed);
+  CHECK(result.result.exact_integer() == 102300);
 }
 
 TEST(kevin_store_exports_and_replaces_only_logical_snapshot_state) {

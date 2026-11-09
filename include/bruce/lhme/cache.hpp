@@ -2,11 +2,12 @@
 
 #include <compare>
 #include <cstdint>
-#include <map>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 #include "bruce/lhme/formula.hpp"
 #include "bruce/lhme/technique.hpp"
@@ -37,19 +38,50 @@ struct CacheKey {
 struct CacheConfig { std::size_t max_entries = 0; std::size_t max_bytes = 0; };
 struct CacheStatistics { std::size_t resident_entries = 0; std::size_t resident_bytes = 0; };
 
+enum class CacheEntryProducer {
+  Unknown,
+  FormulaApi,
+  TechniqueApi,
+};
+
+struct CacheLookup {
+  EvaluationResult result;
+  CacheEntryProducer producer = CacheEntryProducer::Unknown;
+};
+
 class ResultCache {
  public:
   explicit ResultCache(CacheConfig config);
+  ResultCache(const ResultCache& other);
+  ResultCache& operator=(const ResultCache& other);
+  ResultCache(ResultCache&& other) noexcept = default;
+  ResultCache& operator=(ResultCache&& other) noexcept = default;
   [[nodiscard]] std::optional<EvaluationResult> lookup(const CacheKey& key) const;
+  [[nodiscard]] std::optional<CacheLookup> lookup_with_producer(
+      const CacheKey& key) const;
   void admit(const CacheKey& key, const EvaluationResult& result);
+  void admit(const CacheKey& key, const EvaluationResult& result,
+             CacheEntryProducer producer);
   [[nodiscard]] CacheStatistics statistics() const;
 
  private:
-  struct Entry { EvaluationResult result; std::size_t bytes = 0; std::uint64_t sequence = 0; };
+  using RecencyList = std::list<CacheKey>;
+  struct CacheKeyHash {
+    [[nodiscard]] std::size_t operator()(const CacheKey& key) const noexcept;
+  };
+  struct Entry {
+    EvaluationResult result;
+    CacheEntryProducer producer = CacheEntryProducer::Unknown;
+    std::size_t bytes = 0;
+    RecencyList::iterator recency_position;
+  };
+  using EntryMap = std::unordered_map<CacheKey, Entry, CacheKeyHash>;
+  void copy_from_unlocked(const ResultCache& other);
+
   CacheConfig config_;
-  std::map<CacheKey, Entry> entries_;
+  mutable RecencyList recency_;
+  mutable EntryMap entries_;
   std::size_t resident_bytes_ = 0;
-  std::uint64_t sequence_ = 0;
   std::shared_ptr<std::mutex> mutex_;
 };
 }  // namespace bruce::lhme

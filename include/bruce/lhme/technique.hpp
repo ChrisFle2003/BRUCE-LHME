@@ -48,6 +48,14 @@ class TechniqueKernel {
   virtual ~TechniqueKernel() = default;
 
   [[nodiscard]] virtual TechniqueIdentity identity() const = 0;
+  [[nodiscard]] virtual std::optional<ComputationIdentity>
+  canonical_computation_identity(const TechniqueRequest&) const {
+    return std::nullopt;
+  }
+  [[nodiscard]] virtual std::optional<std::string> canonical_parameters(
+      const TechniqueRequest&) const {
+    return std::nullopt;
+  }
   [[nodiscard]] virtual EvaluationResult evaluate(
       const TechniqueRequest& request) const = 0;
 };

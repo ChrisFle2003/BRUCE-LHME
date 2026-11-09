@@ -33,7 +33,10 @@ Kompatibilitätsgrenze für ältere Aufrufer erhalten. Neue Programme verwenden
 stattdessen `GridDomainSpec`/`DomainProjection` plus `FormulaOverrideStore`.
 Der neue Override-Snapshot besitzt ein eigenes Format und akzeptiert alte
 KEVIN-Snapshots nicht stillschweigend. Er prüft Format, kanonische Zahlen,
-Checksummen und unerwartete Restdaten fail-closed.
+Checksummen und unerwartete Restdaten fail-closed. Snapshot-Lader begrenzen
+eine Eingabe auf 16 MiB und ersetzen den Ziel-Store erst nach vollständigem
+Parsing. Die FNV-basierten Checksummen sind Integritätsprüfungen gegen
+unbeabsichtigte Beschädigung, keine kryptografische Authentifizierung.
 
 ## Stable-Prüfung
 
@@ -52,8 +55,9 @@ Standard. Der Override-Store besitzt zusätzlich einen parallelen Read/Write-
 Stresstest, der konsistente Antworten während laufender Override-Updates prüft.
 
 Für reproduzierbare Debug-, Release- und Sanitizer-Builds stehen gleichnamige
-CMake-Presets in `CMakePresets.json` bereit. Der vollständige v0.1-Vertrag und
-die noch plattformabhängigen Freigabeschritte stehen in `docs/release-v0.1.md`.
+CMake-Presets in `CMakePresets.json` bereit. Der aktive v0.2-Releasevertrag,
+die ABI-Policy und die noch extern zu belegenden Freigabeschritte stehen in
+`docs/release-v0.2.md`; `docs/release-v0.1.md` ist historisch.
 
 Wenn eine überwachte Entwicklungsumgebung LeakSanitizer ausdrücklich als mit
 `ptrace` inkompatibel meldet, kann der AddressSanitizer-Testlauf lokal mit

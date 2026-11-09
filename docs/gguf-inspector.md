@@ -48,7 +48,7 @@ Inferenz-Runtime.
 ## Bauen und verwenden
 
 ```bash
-cmake --preset release
+cmake --preset release -DBRUCE_BUILD_TOOLS=ON
 cmake --build --preset release --target bruce_gguf_inspect
 
 ./out/build/release/bruce_gguf_inspect model.gguf \

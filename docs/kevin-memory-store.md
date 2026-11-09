@@ -31,6 +31,27 @@ store.set_override(spec.identity, address, BigInt{42});
 
 Der Legacy-Store enthält nur GridSpecs und Overrides; berechnete Werte liegen ausschließlich im begrenzten Engine-Cache. Der Cache ist ein Beschleuniger, niemals die Quelle der gespeicherten Wahrheit.
 
+## Snapshotformate und Eingabegrenzen
+
+Neue KEVIN-Snapshots verwenden `BRUCE-KEVIN-2`. Neben Identity, Technique,
+kanonischen Parametern und `max_depth` enthält V2 alle fünf Felder von
+`GridSpec::default_budget`. Dadurch bleibt ein Grid nach Speichern und Laden
+mit denselben Ressourcenlimits reproduzierbar.
+
+Der Loader akzeptiert weiterhin `BRUCE-KEVIN-1`. Dieses ältere Format enthielt
+keine Budgetfelder; beim Laden wird deshalb zwingend `Budget::unlimited()`
+verwendet. Ein ursprüngliches abweichendes V1-Budget ist nicht rekonstruierbar.
+`save_snapshot()` schreibt immer V2. Alte Programme können neue V2-Dateien
+nicht lesen und müssen für einen Export in ein altes Programm auf einer älteren
+Bibliotheksversion gespeichert bleiben.
+
+Beide Snapshot-Loader begrenzen Eingabedateien auf 16 MiB, validieren Format,
+Zahlen, Checksum-Zeile und Restdaten vollständig, und ersetzen den Ziel-Store
+erst nach erfolgreichem vollständigem Parsing. Die FNV-basierte Checksumme
+erkennt unbeabsichtigte Beschädigungen; sie ist keine kryptografische
+Authentifizierung und schützt nicht gegen einen Angreifer, der Datei und
+Checksumme gemeinsam ändern kann.
+
 ## 64er-Tile-Filter (V1.6)
 
 Für einen Elternpfad betrachtet KEVIN ein einzelnes 8×8-Tile als genau 64 mögliche

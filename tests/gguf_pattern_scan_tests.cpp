@@ -34,6 +34,16 @@ std::vector<std::byte> f32_file(std::initializer_list<float> values) {
   return bytes;
 }
 
+std::vector<std::byte> raw_f32_file(const std::vector<std::byte>& payload) {
+  CHECK(!payload.empty());
+  CHECK(payload.size() % sizeof(float) == 0U);
+  auto bytes = test::gguf::tensor_file({payload.size() / sizeof(float)},
+                                       test::gguf::kTypeF32, payload.size());
+  std::copy(payload.begin(), payload.end(),
+            bytes.end() - static_cast<std::ptrdiff_t>(payload.size()));
+  return bytes;
+}
+
 GgufPlanItem selected_chunk(const bruce::lhme::GgufInventory& inventory) {
   const auto& tensor = inventory.tensors.front();
   return {.tensor_name = tensor.name,
@@ -47,6 +57,14 @@ bool has_kind(const bruce::lhme::GgufPatternScanResult& result,
               GgufPatternKind kind) {
   return std::any_of(result.candidates.begin(), result.candidates.end(),
                      [kind](const auto& candidate) { return candidate.kind == kind; });
+}
+
+GgufPlanItem chunk_prefix(const bruce::lhme::GgufInventory& inventory,
+                          std::uint64_t byte_count) {
+  auto chunk = selected_chunk(inventory);
+  chunk.stored_byte_count = byte_count;
+  chunk.decoded_ram_bytes = byte_count;
+  return chunk;
 }
 
 }  // namespace
@@ -91,6 +109,105 @@ TEST(gguf_pattern_scan_reports_repeated_bytes_and_exact_f32_progression_candidat
   CHECK(first.status == Status::Confirmed);
   CHECK(has_kind(first, GgufPatternKind::ExactF32ArithmeticProgression));
   CHECK(first.trace->id == second.trace->id);
+}
+
+TEST(gguf_pattern_scan_recognizes_complete_multibyte_repetition) {
+  const std::vector<std::byte> payload = {
+      std::byte{0x12}, std::byte{0x34}, std::byte{0x56}, std::byte{0x12},
+      std::byte{0x34}, std::byte{0x56}, std::byte{0x12}, std::byte{0x34},
+      std::byte{0x56}, std::byte{0x12}, std::byte{0x34}, std::byte{0x56}};
+  const auto path = test::gguf::write_file("multibyte-repeat", raw_f32_file(payload));
+  const auto inspection = inspect_gguf_file(path, GgufInspectionLimits{});
+  const auto chunk = selected_chunk(*inspection.inventory);
+
+  const auto result = scan_gguf_pattern_candidates(
+      path, *inspection.inventory, {&chunk, 1},
+      {.max_payload_bytes = payload.size(), .max_candidates = 8});
+
+  CHECK(result.status == Status::Confirmed);
+  CHECK(has_kind(result, GgufPatternKind::RepeatedBytes));
+}
+
+TEST(gguf_pattern_scan_preserves_constant_bytes_as_constant_and_repeated) {
+  const std::vector<std::byte> payload(8, std::byte{0x5a});
+  const auto path = test::gguf::write_file("constant-raw", raw_f32_file(payload));
+  const auto original = test::gguf::read_file(path);
+  const auto inspection = inspect_gguf_file(path, GgufInspectionLimits{});
+  const auto chunk = selected_chunk(*inspection.inventory);
+
+  const auto result = scan_gguf_pattern_candidates(
+      path, *inspection.inventory, {&chunk, 1},
+      {.max_payload_bytes = payload.size(), .max_candidates = 8});
+
+  CHECK(result.status == Status::Confirmed);
+  CHECK(has_kind(result, GgufPatternKind::ConstantBytes));
+  CHECK(has_kind(result, GgufPatternKind::RepeatedBytes));
+  CHECK(test::gguf::read_file(path) == original);
+}
+
+TEST(gguf_pattern_scan_rejects_incomplete_and_single_byte_repetitions) {
+  const std::vector<std::byte> payload = {
+      std::byte{0x61}, std::byte{0x62}, std::byte{0x63}, std::byte{0x61},
+      std::byte{0x62}, std::byte{0x78}, std::byte{0x79}, std::byte{0x7a}};
+  const auto path = test::gguf::write_file("incomplete-repeat", raw_f32_file(payload));
+  const auto inspection = inspect_gguf_file(path, GgufInspectionLimits{});
+  const auto incomplete = chunk_prefix(*inspection.inventory, 5);
+  const auto single = chunk_prefix(*inspection.inventory, 1);
+
+  const auto incomplete_result = scan_gguf_pattern_candidates(
+      path, *inspection.inventory, {&incomplete, 1},
+      {.max_payload_bytes = 5, .max_candidates = 8});
+  const auto single_result = scan_gguf_pattern_candidates(
+      path, *inspection.inventory, {&single, 1},
+      {.max_payload_bytes = 1, .max_candidates = 8});
+
+  CHECK(incomplete_result.status == Status::Confirmed);
+  CHECK(!has_kind(incomplete_result, GgufPatternKind::RepeatedBytes));
+  CHECK(single_result.status == Status::Confirmed);
+  CHECK(!has_kind(single_result, GgufPatternKind::RepeatedBytes));
+}
+
+TEST(gguf_pattern_scan_rejects_a_large_almost_repeated_chunk) {
+  std::vector<std::byte> payload(64U * 1024U, std::byte{0});
+  payload.back() = std::byte{1};
+  const auto path = test::gguf::write_file("almost-repeated", raw_f32_file(payload));
+  const auto inspection = inspect_gguf_file(path, GgufInspectionLimits{});
+  const auto chunk = selected_chunk(*inspection.inventory);
+
+  const auto result = scan_gguf_pattern_candidates(
+      path, *inspection.inventory, {&chunk, 1},
+      {.max_payload_bytes = payload.size(), .max_candidates = 8});
+
+  CHECK(result.status == Status::Confirmed);
+  CHECK(!has_kind(result, GgufPatternKind::ConstantBytes));
+  CHECK(!has_kind(result, GgufPatternKind::RepeatedBytes));
+}
+
+TEST(gguf_pattern_scan_confirms_an_empty_selection_without_candidates) {
+  const auto path = test::gguf::write_file("empty-selection", f32_file({1.0F, 2.0F}));
+  const auto inspection = inspect_gguf_file(path, GgufInspectionLimits{});
+  const std::vector<GgufPlanItem> no_chunks;
+
+  const auto result = scan_gguf_pattern_candidates(
+      path, *inspection.inventory, no_chunks,
+      {.max_payload_bytes = 8, .max_candidates = 8});
+
+  CHECK(result.status == Status::Confirmed);
+  CHECK(result.candidates.empty());
+}
+
+TEST(gguf_pattern_scan_preserves_candidate_budget_for_constant_repetition) {
+  const std::vector<std::byte> payload(8, std::byte{0x5a});
+  const auto path = test::gguf::write_file("candidate-budget", raw_f32_file(payload));
+  const auto inspection = inspect_gguf_file(path, GgufInspectionLimits{});
+  const auto chunk = selected_chunk(*inspection.inventory);
+
+  const auto result = scan_gguf_pattern_candidates(
+      path, *inspection.inventory, {&chunk, 1},
+      {.max_payload_bytes = payload.size(), .max_candidates = 1});
+
+  CHECK(result.status == Status::BudgetExceeded);
+  CHECK(result.diagnostic == "scan candidate budget exceeded");
 }
 
 TEST(gguf_pattern_scan_stops_at_its_work_budget_and_never_modifies_input) {

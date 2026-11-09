@@ -7,6 +7,13 @@
 #include <limits>
 #include <utility>
 
+#if defined(BRUCE_LHME_TESTING)
+#include "scheduler_candidate_test_barrier.hpp"
+#include "scheduler_final_tile_aggregation_test_barrier.hpp"
+#include "scheduler_published_candidate_test_barrier.hpp"
+#include "scheduler_tile_test_barrier.hpp"
+#endif
+
 namespace bruce::lhme {
 namespace {
 struct TileResult { std::uint64_t id; RangeResult result; };
@@ -20,6 +27,9 @@ bool cancellation_requested(const EvaluationRequest& request) {
 TileResult evaluate_tile(std::uint64_t id, const EvaluationRequest& request,
                          AddressRange range) {
   TileResult tile{.id = id};
+#if defined(BRUCE_LHME_TESTING)
+  test_support::wait_for_scheduler_tile_test_barrier();
+#endif
   for (std::int64_t index = range.start;; ++index) {
     if (cancellation_requested(request)) {
       tile.result.status = Status::Cancelled;
@@ -33,6 +43,9 @@ TileResult evaluate_tile(std::uint64_t id, const EvaluationRequest& request,
     if (value.status == Status::Confirmed) {
       ++tile.result.summary.confirmed_count;
       tile.result.candidates.push_back(std::move(value));
+#if defined(BRUCE_LHME_TESTING)
+      test_support::wait_for_scheduler_candidate_test_barrier();
+#endif
     } else if (value.status == Status::InvalidArgument) {
       ++tile.result.summary.invalid_argument_count;
     }
@@ -91,10 +104,25 @@ RangeResult evaluate_range(const EvaluationRequest& request, AddressRange range,
       output.summary.checked_count += tile.result.summary.checked_count;
       output.summary.confirmed_count += tile.result.summary.confirmed_count;
       output.summary.invalid_argument_count += tile.result.summary.invalid_argument_count;
+#if defined(BRUCE_LHME_TESTING)
+      const bool aggregated_confirmed_candidate = !tile.result.candidates.empty();
+#endif
       for (auto& candidate : tile.result.candidates) {
         output.candidates.push_back(std::move(candidate));
+#if defined(BRUCE_LHME_TESTING)
+        test_support::wait_for_scheduler_published_candidate_test_barrier();
+#endif
       }
+#if defined(BRUCE_LHME_TESTING)
+      if (aggregated_confirmed_candidate) {
+        test_support::wait_for_scheduler_final_tile_aggregation_test_barrier();
+      }
+#endif
     }
+  }
+  if (cancellation_requested(request)) {
+    output.status = Status::Cancelled;
+    output.candidates.clear();
   }
   return output;
 }

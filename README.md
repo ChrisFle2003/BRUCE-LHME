@@ -25,23 +25,26 @@ formula: a `DomainProjection` explicitly maps a grid address to a formula
 address. This preserves deterministic reconstruction while keeping stored data
 sparse.
 
-## v0.1 scope
+## v0.2 scope
 
 - CPU and RAM execution only
 - exact `BigInt`, modular, metric and symbolic formula evaluation
 - bounded result cache and sparse formula overrides
 - deterministic traces, resource budgets and safe cancellation
+- engine-owned Exact Formula/Technique cache equivalence with explicit bindings
 - KEVIN domain projections and candidate-local filtering
 - installable CMake package and extension-kernel SDK
 
 GPU backends, NanoCell runtime, semantic routing, AnswerPoints and Experience
-Records are future concepts, not shipped v0.1 features.
+Records are future concepts, not shipped v0.2 features.
 
 ## Requirements
 
 - CMake 3.25 or newer
 - A C++20 compiler
 - C and C++ standard library threading support
+- Boost development headers, including `boost/multiprecision/cpp_int.hpp`,
+  installed and discoverable by CMake (no compiled Boost library is required)
 
 ## Build and test
 
@@ -79,23 +82,43 @@ binaries.
 Install BRUCE LHME, then consume it from another project:
 
 ```cmake
-find_package(bruce_lhme 0.1 CONFIG REQUIRED)
+find_package(bruce_lhme 0.2 CONFIG REQUIRED)
 
 add_executable(my_program main.cpp)
 target_link_libraries(my_program PRIVATE bruce_lhme::core)
 ```
 
+The exported target resolves Boost and thread support transitively; consumers
+need not link either dependency separately.
+
+Minor releases before 1.0 are distinct public C++ API/ABI generations.
+Reconfigure, rebuild and relink C++ consumers when moving to a new minor
+version. The C ABI and `TechniqueKernel` VTable compatibility for v0.2 are
+documented in the release note.
+
 The checked external example lives in
 [`examples/external_consumer`](examples/external_consumer).
 
+## C ABI
+
+The C-compatible public header is
+[`include/bruce/lhme/c_api.h`](include/bruce/lhme/c_api.h). It uses opaque
+engine, formula and result handles. Their ownership, nullable return values,
+result strings and cancellation behaviour are specified in
+[C ABI lifecycle and cancellation](docs/c-api.md).
+
 ## Documentation
 
+- [Developer Guide (English)](docs/developer-guide.en.md)
 - [Implemented architecture](docs/architecture.md)
+- [C ABI lifecycle and cancellation](docs/c-api.md)
 - [Benchmark review — 2026-10-21](docs/benchmark-review-2026-10-21.md)
   - [Fair comparison: separate Tracks A, B and C](docs/benchmark-review-2026-10-21.md#fair-comparison-track-a)
-- [v0.1 release contract](docs/release-v0.1.md)
-- [Concept collection](concepts/README.md)
+- [v0.2 release notes and version/ABI policy](docs/release-v0.2.md)
+- [v0.1 release contract (historical)](docs/release-v0.1.md)
+- [Implemented component overview](concepts/README.md)
 - [Kernel SDK](docs/kernel-sdk.md)
+  - [Exact Formula/Technique cache equivalence](docs/kernel-sdk.md#5-exakte-cache-äquivalenz-zwischen-formula-und-technique)
 - [GGUF Inspector V1](docs/gguf-inspector.md)
 
 ## License

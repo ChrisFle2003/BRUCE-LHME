@@ -175,6 +175,20 @@ std::string canonical_formula_identity(const FormulaSpec& spec) {
                              spec.nonnegative_index, spec.version);
 }
 
+ComputationIdentity canonical_computation_identity(const FormulaSpec& spec) {
+  return {.value = "formula:" + canonical_formula_identity(spec)};
+}
+
+bool valid_formula_spec(const FormulaSpec& spec) {
+  if (spec.operation != FormulaOperation::PowerOffset || spec.base <= 0 ||
+      spec.scale < 0 || !spec.nonnegative_index || spec.version == 0) {
+    return false;
+  }
+  return spec.specification_hash ==
+         make_power_offset_spec(spec.base, spec.scale, spec.version)
+             .specification_hash;
+}
+
 EvaluationResult evaluate_power_offset_impl(
     const FormulaSpec& spec, const FormulaAddress& address,
     EvaluationMode mode, const Budget& budget,
@@ -241,6 +255,10 @@ EvaluationResult evaluate(const EvaluationRequest& request) {
   if (request.budget.max_trace_bytes == 0) {
     return {.status = Status::BudgetExceeded, .mode = request.mode};
   }
+  const auto finish = [&request](EvaluationResult result) {
+    enforce_trace_budget(result, request.budget.max_trace_bytes);
+    return result;
+  };
   if (request.cancellation_requested ||
       (request.cancellation_signal != nullptr &&
        request.cancellation_signal->load())) {
@@ -250,7 +268,7 @@ EvaluationResult evaluate(const EvaluationRequest& request) {
     result.trace = make_trace({{.scope = GateScope::Run,
                                 .status = result.status,
                                 .reason = "request cancellation requested"}});
-    return result;
+    return finish(std::move(result));
   }
   if (request.mode == EvaluationMode::Modular) {
     EvaluationResult result;
@@ -261,7 +279,7 @@ EvaluationResult evaluate(const EvaluationRequest& request) {
       result.trace = make_trace({{.scope = GateScope::Branch,
                                   .status = result.status,
                                   .reason = "invalid modular request"}});
-      return result;
+      return finish(std::move(result));
     }
     const auto exponent = static_cast<std::uint64_t>(request.address.index);
     const auto base_power = power_mod(request.spec.base, exponent,
@@ -272,7 +290,7 @@ EvaluationResult evaluate(const EvaluationRequest& request) {
       result.trace = make_trace({{.scope = GateScope::Run,
                                   .status = result.status,
                                   .reason = "request cancellation requested"}});
-      return result;
+      return finish(std::move(result));
     }
     BigInt value = (request.spec.scale % *request.modulus) *
                    ((*base_power - 1) % *request.modulus);
@@ -283,7 +301,7 @@ EvaluationResult evaluate(const EvaluationRequest& request) {
     result.status = Status::Confirmed;
     result.integer = std::move(value);
     result.trace = make_trace({});
-    return result;
+    return finish(std::move(result));
   }
 
   EvaluationResult result = evaluate_power_offset_impl(
@@ -304,7 +322,7 @@ EvaluationResult evaluate(const EvaluationRequest& request) {
   } else {
     result.trace = make_trace({});
   }
-  return result;
+  return finish(std::move(result));
 }
 
 }  // namespace bruce::lhme

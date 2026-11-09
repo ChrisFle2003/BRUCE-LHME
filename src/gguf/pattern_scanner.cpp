@@ -8,6 +8,7 @@
 #include <limits>
 #include <map>
 #include <utility>
+#include <vector>
 
 namespace bruce::lhme {
 namespace {
@@ -37,15 +38,20 @@ constexpr std::uint32_t kGgmlTypeF32 = 0;
                      [first = bytes.front()](std::byte value) { return value == first; });
 }
 
-[[nodiscard]] bool repeated_unit(std::span<const std::byte> bytes,
-                                 std::size_t unit_size) {
-  if (unit_size == 0 || bytes.size() <= unit_size || bytes.size() % unit_size != 0U) {
-    return false;
+[[nodiscard]] bool repeated_unit(std::span<const std::byte> bytes) {
+  if (bytes.size() < 2U) return false;
+
+  std::vector<std::size_t> prefix(bytes.size());
+  for (std::size_t index = 1; index < bytes.size(); ++index) {
+    auto matched = prefix[index - 1U];
+    while (matched != 0U && bytes[index] != bytes[matched]) {
+      matched = prefix[matched - 1U];
+    }
+    if (bytes[index] == bytes[matched]) ++matched;
+    prefix[index] = matched;
   }
-  for (std::size_t offset = unit_size; offset < bytes.size(); ++offset) {
-    if (bytes[offset] != bytes[offset % unit_size]) return false;
-  }
-  return true;
+  const auto period = bytes.size() - prefix.back();
+  return period < bytes.size() && bytes.size() % period == 0U;
 }
 
 [[nodiscard]] std::uint32_t read_f32_bits(const std::byte* bytes) {
@@ -161,19 +167,15 @@ GgufPatternScanResult scan_gguf_pattern_candidates(
                                        .evidence = "constant byte or F32 element sequence"})) {
       return result_with(Status::BudgetExceeded, "scan candidate budget exceeded");
     }
-    for (std::size_t unit_size = 1; unit_size <= bytes.size() / 2U; ++unit_size) {
-      if (repeated_unit(bytes, unit_size)) {
-        if (!append_candidate(result.candidates, config.max_candidates,
-                              {.kind = GgufPatternKind::RepeatedBytes,
-                               .tensor_name = chunk.tensor_name,
-                               .file_offset = chunk.file_offset,
-                               .stored_byte_count = chunk.stored_byte_count,
-                               .exactly_verified = false,
-                               .evidence = "repeated raw byte block"})) {
-          return result_with(Status::BudgetExceeded, "scan candidate budget exceeded");
-        }
-        break;
-      }
+    if (repeated_unit(bytes) &&
+        !append_candidate(result.candidates, config.max_candidates,
+                          {.kind = GgufPatternKind::RepeatedBytes,
+                           .tensor_name = chunk.tensor_name,
+                           .file_offset = chunk.file_offset,
+                           .stored_byte_count = chunk.stored_byte_count,
+                           .exactly_verified = false,
+                           .evidence = "repeated raw byte block"})) {
+      return result_with(Status::BudgetExceeded, "scan candidate budget exceeded");
     }
     if (tensor->ggml_type == kGgmlTypeF32 && f32_progression(bytes) &&
         !append_candidate(result.candidates, config.max_candidates,

@@ -26,14 +26,14 @@ cmake --build build
 Die eigene `CMakeLists.txt` enthält:
 
 ```cmake
-find_package(bruce_lhme 0.1 CONFIG REQUIRED)
+find_package(bruce_lhme 0.2 CONFIG REQUIRED)
 
 add_executable(my_kernel main.cpp)
 target_link_libraries(my_kernel PRIVATE bruce_lhme::core)
 ```
 
 Das exportierte Target liefert die öffentlichen BRUCE-Header, C++20 und die
-benötigte Threads-Abhängigkeit.
+benötigten Threads- und Boost-Header-Abhängigkeiten.
 
 ## 2. Kernel schreiben
 
@@ -83,7 +83,8 @@ bestätigte BigInt-Ergebnis `45`.
 2. Prüfe `cancellation_requested(request)` vor jedem potenziell langen
    Rechenschritt.
 3. Beachte die Ressourcenlimits aus `request.budget`; `Engine` prüft das
-   veröffentlichte Ergebnis zusätzlich.
+   veröffentlichte Ergebnis zusätzlich, einschließlich der harten
+   `max_trace_bytes`-Grenze für Kernel-Traces.
 4. Nutze `confirmed_exact_result` für exakte Ganzzahlen. Der Helper verlangt
    einen Trace; bei einem Null-Trace wird ein leerer Basis-Trace erzeugt.
 5. Nutze `invalid_technique_request_result` für ungültige Eingaben und
@@ -112,3 +113,117 @@ ctest --test-dir build -R lhme_kernel_sdk_consumer --output-on-failure
 Das Consumer-Beispiel liegt unter `examples/kernel_sdk_consumer/`. Es nutzt
 nur `find_package` und `bruce_lhme::core`; damit ist es die Vorlage für ein
 unabhängiges Projekt.
+
+## 5. Exakte Cache-Äquivalenz zwischen Formula und Technique
+
+Eine Technique kann **nur für `EvaluationMode::Exact`** bewusst mit einer
+Formula denselben Result-Cache-Eintrag verwenden. Das ist kein Verhalten, das
+ein Kernel selbst behaupten oder über seine `ComputationIdentity` erzwingen
+kann: Die besitzende `Engine` akzeptiert dafür eine unveränderliche
+`ExactFormulaTechniqueCacheBinding`.
+
+Die folgende, vollständige Reihenfolge ist auch im ausführbaren
+[`lhme_technique_demo`](../demos/lhme/technique_demo.cpp) enthalten. Das
+Beispiel befüllt den Cache über die Formula-API und liest den exakt selben Wert
+anschließend über die Technique-API.
+
+```cpp
+#include <memory>
+
+#include "bruce/lhme/engine.hpp"
+#include "bruce/lhme/power_offset_kernel.hpp"
+#include "bruce/lhme/trace.hpp"
+
+int main() {
+  using namespace bruce::lhme;
+
+  auto engine = Engine::create({.cache_max_entries = 8, .cache_max_bytes = 4096});
+
+  // 1. Die äquivalente Formula in genau dieser Engine registrieren.
+  const PowerOffsetKernel identity_source;
+  const auto version = identity_source.identity().version;
+  const auto formula = engine.register_formula(make_power_offset_spec(2, 100, version));
+
+  // 2. Die Technique in derselben Engine registrieren.
+  const auto kernel = std::make_shared<PowerOffsetKernel>();
+  if (!engine.register_technique(kernel)) return 1;
+
+  // 3. Die Engine-eigene, genaue Gleichheitsbehauptung registrieren.
+  // Der Helper erzeugt die kanonischen Formula- und Parameterwerte.
+  if (!engine.register_exact_formula_cache_binding(
+          make_power_offset_exact_cache_binding(2, 100, version))) {
+    return 1;
+  }
+
+  // 4. Eine Exact-Formula-Anfrage erzeugt den gemeinsamen Cache-Eintrag.
+  const auto formula_result = engine.evaluate({
+      .spec = formula,
+      .address = {.index = 10},
+      .mode = EvaluationMode::Exact,
+      .budget = Budget::unlimited(),
+  });
+
+  // 5. Dieselbe Exact-Technique-Anfrage verwendet den Formula-Cache-Key.
+  const auto technique_result = engine.evaluate_technique({
+      .identity = kernel->identity(),
+      .parameters = encode_power_offset_parameters(2, 100),
+      .address = {.index = 10},
+      .mode = EvaluationMode::Exact,
+      .budget = Budget::unlimited(),
+  });
+
+  if (formula_result.status != Status::Confirmed ||
+      technique_result.status != Status::Confirmed ||
+      formula_result.exact_integer() != technique_result.exact_integer()) {
+    return 1;
+  }
+
+  // Der API-übergreifende Treffer hat bewusst keine Producer-Trace.
+  return technique_result.trace != nullptr &&
+                 technique_result.trace->events.size() == 1 &&
+                 technique_result.trace->events.front().reason ==
+                     "cross-api exact cache hit"
+             ? 0
+             : 1;
+}
+```
+
+`make_power_offset_exact_cache_binding(base, scale, version)` ist ein kleiner,
+expliziter Helper für den eingebauten `PowerOffsetKernel`. `version` muss
+exakt `PowerOffsetKernel::identity().version` sein. Bei jeder anderen Version
+wirft der Helper `std::invalid_argument`; er erzeugt keine möglicherweise
+falsche Äquivalenzdeklaration.
+
+### Vertrag und Grenzen
+
+- Eine Binding wird nur akzeptiert, wenn sowohl ihre `FormulaSpec` als auch
+  ihre `TechniqueIdentity` bereits in **derselben** Engine registriert sind.
+  Die Technique-Identity, Version und der Parameterstring bilden gemeinsam den
+  unveränderlichen Binding-Schlüssel.
+- `accepted_parameters` werden bytegenau mit
+  `TechniqueRequest::parameters` verglichen. Die Engine interpretiert oder
+  parst diesen String nicht. Leere Strings und Strings über 4096 Bytes werden
+  bei der Registrierung abgelehnt.
+- Eine identische erneute Registrierung ist idempotent und erfolgreich. Eine
+  Binding mit derselben Technique-ID, Technique-Version und demselben
+  Parameterstring, die auf eine andere Formula zeigt, wird abgelehnt.
+- Nur Exact-Anfragen teilen einen Cache-Key: Die Formula verwendet
+  `CacheKey::exact(formula, index)` und eine passend gebundene Technique
+  verwendet denselben Key. `Metric`, `Symbolic` und `Modular` werden nicht
+  API-übergreifend geteilt.
+- `ComputationIdentity` steuert weiterhin ausschließlich Inflight-Gruppen,
+  Leases und Cancellation. Sie autorisiert keine Binding und erzeugt keinen
+  Cache-Key.
+- Bei einem API-übergreifenden Treffer liefert die Engine immer die neutrale
+  Trace mit dem Grund `cross-api exact cache hit`; die Trace des ursprünglichen
+  Producers wird nicht offengelegt. Gleichartige Formula- oder Technique-Hits
+  behalten ihre normale Cache-Trace.
+- Budget und Cancellation werden bei **jedem** Cache-Hit erneut geprüft. Ein
+  gecancelter Aufruf verändert oder entfernt den vorhandenen Cache-Eintrag
+  nicht. Die Binding führt kein Singleflight ein: Gleichzeitige Cache-Misses
+  dürfen weiterhin parallel berechnen.
+
+Die `TechniqueKernel`-VTable und die C-ABI bleiben dabei unverändert. Die
+Binding ist eine C++-`Engine`-API; für die C-ABI gibt es keine neue Funktion.
+Weil `Engine` als öffentliche C++-Klasse erweitert wurde, müssen C++-
+Binary-Consumer gegen die neue Bibliotheksversion neu gebaut werden.

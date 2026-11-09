@@ -17,6 +17,17 @@ struct TraceRecord;
 
 using BigInt = boost::multiprecision::cpp_int;
 
+struct ComputationIdentity {
+  std::string value;
+
+  auto operator==(const ComputationIdentity&) const -> bool = default;
+};
+
+[[nodiscard]] inline bool valid_computation_identity(
+    const ComputationIdentity& identity) {
+  return !identity.value.empty();
+}
+
 enum class EvaluationMode {
   Symbolic,
   Metric,

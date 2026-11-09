@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(bruce_lhme VERSION 0.1.0 LANGUAGES C CXX)
+project(bruce_lhme VERSION 0.2.0 LANGUAGES C CXX)
 
 find_package(Threads REQUIRED)
+find_package(Boost REQUIRED)
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -36,6 +37,13 @@ if(NOT BRUCE_SANITIZER STREQUAL "none")
   endif()
 endif()
 
+# Keep an ad-hoc configuration product-oriented.  The maintained developer
+# presets explicitly set BUILD_TESTING=ON.
+option(BUILD_TESTING "Build test executables and register CTest tests" OFF)
+option(BRUCE_BUILD_TOOLS "Build BRUCE command-line tools" OFF)
+option(BRUCE_BUILD_EXAMPLES "Build BRUCE examples and demos" OFF)
+option(BRUCE_BUILD_BENCHMARKS "Build BRUCE benchmarks" OFF)
+
 include(CTest)
 
 add_library(bruce_lhme_core STATIC
@@ -68,7 +76,11 @@ target_include_directories(bruce_lhme_core
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(bruce_lhme_core PUBLIC cxx_std_20)
-target_link_libraries(bruce_lhme_core PUBLIC Threads::Threads)
+target_link_libraries(bruce_lhme_core PUBLIC Threads::Threads Boost::boost)
+if(BUILD_TESTING)
+  target_include_directories(bruce_lhme_core PRIVATE tests/support)
+  target_compile_definitions(bruce_lhme_core PRIVATE BRUCE_LHME_TESTING=1)
+endif()
 if(BRUCE_SANITIZER_LINK_OPTION)
   # A static archive contains instrumented objects. Export the matching runtime
   # link option so find_package() consumers link successfully as well.
@@ -76,6 +88,7 @@ if(BRUCE_SANITIZER_LINK_OPTION)
 endif()
 set_target_properties(bruce_lhme_core PROPERTIES EXPORT_NAME core)
 
+if(BUILD_TESTING)
 add_executable(core_formula_tests
   tests/support/test_main.cpp
   tests/core_formula_tests.cpp
@@ -118,14 +131,18 @@ target_include_directories(gguf_report_tests PRIVATE
 target_link_libraries(gguf_report_tests PRIVATE bruce_lhme_core)
 target_sources(gguf_report_tests PRIVATE tools/gguf_inspect/command.cpp)
 add_test(NAME gguf_report_tests COMMAND gguf_report_tests)
+endif()
 
+if(BRUCE_BUILD_TOOLS)
 add_executable(bruce_gguf_inspect
   tools/gguf_inspect/command.cpp
   tools/gguf_inspect/main.cpp
 )
 target_include_directories(bruce_gguf_inspect PRIVATE include tools/gguf_inspect)
 target_link_libraries(bruce_gguf_inspect PRIVATE bruce_lhme_core)
+endif()
 
+if(BUILD_TESTING)
 add_executable(core_budget_trace_tests
   tests/support/test_main.cpp
   tests/core_budget_trace_tests.cpp
@@ -166,6 +183,14 @@ target_include_directories(engine_tests PRIVATE tests/support include)
 target_link_libraries(engine_tests PRIVATE bruce_lhme_core)
 add_test(NAME engine_tests COMMAND engine_tests)
 
+add_executable(exact_cache_equivalence_tests
+  tests/support/test_main.cpp
+  tests/exact_cache_equivalence_tests.cpp
+)
+target_include_directories(exact_cache_equivalence_tests PRIVATE tests/support include)
+target_link_libraries(exact_cache_equivalence_tests PRIVATE bruce_lhme_core)
+add_test(NAME exact_cache_equivalence_tests COMMAND exact_cache_equivalence_tests)
+
 add_executable(c_api_tests
   tests/support/test_main.cpp
   tests/c_api_tests.cpp
@@ -179,35 +204,49 @@ target_include_directories(c_api_header_smoke PRIVATE include)
 target_link_libraries(c_api_header_smoke PRIVATE bruce_lhme_core)
 set_target_properties(c_api_header_smoke PROPERTIES LINKER_LANGUAGE CXX)
 add_test(NAME c_api_header_smoke COMMAND c_api_header_smoke)
+endif()
 
+if(BUILD_TESTING OR BRUCE_BUILD_EXAMPLES)
 add_executable(lhme_formula_demo demos/lhme/formula_demo.cpp)
 target_include_directories(lhme_formula_demo PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_formula_demo PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_formula_demo COMMAND lhme_formula_demo)
+endif()
 
 add_executable(lhme_range_demo demos/lhme/range_demo.cpp)
 target_include_directories(lhme_range_demo PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_range_demo PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_range_demo COMMAND lhme_range_demo)
+endif()
 
 add_executable(lhme_memory_demo demos/lhme/memory_demo.cpp)
 target_include_directories(lhme_memory_demo PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_memory_demo PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_memory_demo COMMAND lhme_memory_demo)
+endif()
+endif()
 
+if(BUILD_TESTING OR BRUCE_BUILD_BENCHMARKS)
 add_executable(lhme_streaming_benchmark
   demos/lhme/benchmarks/streaming_benchmark.cpp
 )
 target_include_directories(lhme_streaming_benchmark PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_streaming_benchmark PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_streaming_benchmark COMMAND lhme_streaming_benchmark)
+endif()
 
 add_executable(lhme_controlled_stress
   demos/lhme/benchmarks/stress/controlled_stress.cpp
 )
 target_include_directories(lhme_controlled_stress PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_controlled_stress PRIVATE bruce_lhme_core)
+endif()
 
+if(BUILD_TESTING)
 add_executable(isolated_protocol_tests
   tests/support/test_main.cpp
   tests/isolated_protocol_tests.cpp
@@ -265,7 +304,9 @@ target_include_directories(fair_benchmark_contract_tests PRIVATE
 )
 target_link_libraries(fair_benchmark_contract_tests PRIVATE bruce_lhme_core)
 add_test(NAME fair_benchmark_contract_tests COMMAND fair_benchmark_contract_tests)
+endif()
 
+if(BUILD_TESTING OR BRUCE_BUILD_BENCHMARKS)
 add_executable(lhme_fair_storage_benchmark
   demos/lhme/benchmarks/fair/fair_storage_benchmark.cpp
 )
@@ -273,15 +314,21 @@ target_include_directories(lhme_fair_storage_benchmark PRIVATE
   include demos/lhme/support demos/lhme/benchmarks/fair demos/lhme/benchmarks/stress
 )
 target_link_libraries(lhme_fair_storage_benchmark PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_fair_storage_benchmark COMMAND lhme_fair_storage_benchmark --quick)
+endif()
+endif()
 
+if(BUILD_TESTING)
 add_test(
   NAME fair_benchmark_docs_test
   COMMAND ${CMAKE_COMMAND}
     -DREVIEW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/docs/benchmark-review-2026-10-21.md
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/fair_benchmark_docs_test.cmake
 )
+endif()
 
+if(BUILD_TESTING)
 add_executable(storage_policy_tests
   tests/support/test_main.cpp
   tests/storage_policy_tests.cpp
@@ -354,22 +401,32 @@ add_executable(kevin_filter_tests tests/support/test_main.cpp tests/kevin/kevin_
 target_include_directories(kevin_filter_tests PRIVATE tests/support include)
 target_link_libraries(kevin_filter_tests PRIVATE bruce_lhme_core)
 add_test(NAME kevin_filter_tests COMMAND kevin_filter_tests)
+endif()
 
+if(BUILD_TESTING OR BRUCE_BUILD_EXAMPLES)
 add_executable(lhme_kevin_memory_store_demo demos/lhme/kevin_memory_store_demo.cpp)
 target_include_directories(lhme_kevin_memory_store_demo PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_kevin_memory_store_demo PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_kevin_memory_store_demo COMMAND lhme_kevin_memory_store_demo)
+endif()
 
 add_executable(lhme_kevin_grid_filter_demo demos/lhme/kevin_grid_filter_demo.cpp)
 target_include_directories(lhme_kevin_grid_filter_demo PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_kevin_grid_filter_demo PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_kevin_grid_filter_demo COMMAND lhme_kevin_grid_filter_demo)
+endif()
 
 add_executable(lhme_technique_demo demos/lhme/technique_demo.cpp)
 target_include_directories(lhme_technique_demo PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_technique_demo PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_technique_demo COMMAND lhme_technique_demo)
+endif()
+endif()
 
+if(BUILD_TESTING OR BRUCE_BUILD_BENCHMARKS)
 add_executable(lhme_table_memory_benchmark
   demos/lhme/benchmarks/table_memory/table_memory_benchmark.cpp
 )
@@ -380,7 +437,9 @@ target_include_directories(lhme_table_memory_benchmark PRIVATE
   demos/lhme/benchmarks/stress
 )
 target_link_libraries(lhme_table_memory_benchmark PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_table_memory_benchmark COMMAND lhme_table_memory_benchmark)
+endif()
 
 add_executable(lhme_kevin_cpu_benchmark
   demos/lhme/benchmarks/kevin_cpu/kevin_cpu_benchmark.cpp
@@ -391,7 +450,9 @@ target_include_directories(lhme_kevin_cpu_benchmark PRIVATE
   demos/lhme/benchmarks/table_memory
 )
 target_link_libraries(lhme_kevin_cpu_benchmark PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_kevin_cpu_benchmark COMMAND lhme_kevin_cpu_benchmark)
+endif()
 
 add_executable(lhme_hybrid_storage_benchmark
   demos/lhme/benchmarks/hybrid_storage/hybrid_storage_benchmark.cpp
@@ -402,12 +463,17 @@ target_include_directories(lhme_hybrid_storage_benchmark PRIVATE
   demos/lhme/benchmarks/table_memory
 )
 target_link_libraries(lhme_hybrid_storage_benchmark PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
 add_test(NAME lhme_hybrid_storage_benchmark COMMAND lhme_hybrid_storage_benchmark)
+endif()
+endif()
 
+if(BUILD_TESTING)
 add_executable(lhme_demo_report_tests demos/lhme/report_tests.cpp)
 target_include_directories(lhme_demo_report_tests PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_demo_report_tests PRIVATE bruce_lhme_core)
 add_test(NAME lhme_demo_report_tests COMMAND lhme_demo_report_tests)
+endif()
 
 include(CMakePackageConfigHelpers)
 
@@ -433,7 +499,7 @@ configure_package_config_file(
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/bruce_lhmeConfigVersion.cmake"
   VERSION ${PROJECT_VERSION}
-  COMPATIBILITY SameMajorVersion
+  COMPATIBILITY SameMinorVersion
 )
 install(FILES
   "${CMAKE_CURRENT_BINARY_DIR}/bruce_lhmeConfig.cmake"
@@ -442,6 +508,11 @@ install(FILES
 )
 
 if(BUILD_TESTING)
+  add_test(
+    NAME cmake_presets_contract
+    COMMAND ${CMAKE_COMMAND}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake_presets_contract_test.cmake")
+
   add_test(
     NAME lhme_package_layout
     COMMAND ${CMAKE_COMMAND}

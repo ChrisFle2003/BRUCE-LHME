@@ -105,7 +105,23 @@ TEST(formula_override_store_rejects_invalid_modulus_and_too_small_override_budge
   CHECK(store.evaluate(limited).result.status == Status::BudgetExceeded);
 }
 
-TEST(formula_override_store_preserves_engine_cancellation_for_computed_values) {
+TEST(formula_override_store_rejects_an_override_that_exceeds_its_trace_budget) {
+  auto engine = Engine::create({});
+  const auto binding = power_binding(engine);
+  FormulaOverrideStore store{engine};
+  CHECK(store.set_override(binding, {.index = 4}, BigInt{1024}) == Status::Confirmed);
+  auto trace_limited = request_for(binding, 4);
+  trace_limited.budget.max_trace_bytes = 0;
+
+  const auto result = store.evaluate(trace_limited);
+
+  CHECK(result.source == FormulaValueSource::Override);
+  CHECK(result.result.status == Status::BudgetExceeded);
+  CHECK(!result.result.integer.has_value());
+  CHECK(result.result.trace == nullptr);
+}
+
+TEST(formula_override_store_ignores_idle_engine_cancellation_for_computed_values) {
   auto engine = Engine::create({});
   const auto binding = power_binding(engine);
   FormulaOverrideStore store{engine};
@@ -114,7 +130,7 @@ TEST(formula_override_store_preserves_engine_cancellation_for_computed_values) {
   const auto result = store.evaluate(request_for(binding, 4));
 
   CHECK(result.source == FormulaValueSource::Computed);
-  CHECK(result.result.status == Status::Cancelled);
+  CHECK(result.result.status == Status::Confirmed);
 }
 
 TEST(formula_override_store_keeps_reads_valid_during_override_updates) {

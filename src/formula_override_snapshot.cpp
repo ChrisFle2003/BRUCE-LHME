@@ -1,10 +1,24 @@
 #include "bruce/lhme/formula_override_snapshot.hpp"
 
+#include <array>
+#include <atomic>
+#include <charconv>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace bruce::lhme {
 namespace {
@@ -12,6 +26,43 @@ namespace {
 constexpr char kMagic[] = "BRUCE-FORMULA-OVERRIDE-1\n";
 constexpr std::size_t kMaximumRecords = 100'000;
 constexpr std::size_t kMaximumStringBytes = 1'000'000;
+constexpr std::uintmax_t kMaximumSnapshotBytes = 16U * 1024U * 1024U;
+
+enum class SnapshotFileReadStatus { Confirmed, IoError, TooLarge };
+
+SnapshotFileReadStatus read_snapshot_file(const std::filesystem::path& path,
+                                          std::string& contents) {
+  std::error_code error;
+  const auto file_size = std::filesystem::file_size(path, error);
+  if (error) return SnapshotFileReadStatus::IoError;
+  if (file_size > kMaximumSnapshotBytes) return SnapshotFileReadStatus::TooLarge;
+
+  std::ifstream input(path, std::ios::binary);
+  if (!input) return SnapshotFileReadStatus::IoError;
+
+  contents.clear();
+  contents.reserve(static_cast<std::size_t>(file_size));
+  std::array<char, 4096> buffer{};
+  while (input.read(buffer.data(), static_cast<std::streamsize>(buffer.size())) ||
+         input.gcount() > 0) {
+    const auto count = static_cast<std::size_t>(input.gcount());
+    if (count > kMaximumSnapshotBytes - contents.size()) {
+      return SnapshotFileReadStatus::TooLarge;
+    }
+    contents.append(buffer.data(), count);
+  }
+  return input.eof() ? SnapshotFileReadStatus::Confirmed
+                     : SnapshotFileReadStatus::IoError;
+}
+
+bool parse_checksum_suffix(std::string_view suffix, std::uint64_t& value) {
+  if (suffix.size() < 2 || suffix.back() != '\n') return false;
+  const auto digits = suffix.substr(0, suffix.size() - 1U);
+  if (digits.empty() || (digits.size() > 1U && digits.front() == '0')) return false;
+  const auto [end, error] = std::from_chars(digits.data(),
+                                             digits.data() + digits.size(), value);
+  return error == std::errc{} && end == digits.data() + digits.size();
+}
 
 std::uint64_t checksum(std::string_view bytes) {
   std::uint64_t hash = 14695981039346656037ULL;
@@ -142,54 +193,109 @@ bool read_record(std::istream& input, FormulaOverrideRecord& record) {
   return false;
 }
 
+std::optional<std::filesystem::path> make_temporary_path(
+    const std::filesystem::path& path) {
+  static std::atomic<std::uint64_t> sequence = 0;
+  std::random_device random;
+  for (std::size_t attempt = 0; attempt < 16; ++attempt) {
+    const auto nonce = std::to_string(random()) + "." +
+                       std::to_string(std::chrono::steady_clock::now()
+                                          .time_since_epoch()
+                                          .count()) +
+                       "." + std::to_string(sequence.fetch_add(1));
+    const auto temporary = path.parent_path() /
+                           (path.filename().string() + ".tmp." + nonce);
+    std::error_code error;
+    if (!std::filesystem::exists(temporary, error) && !error) return temporary;
+  }
+  return std::nullopt;
+}
+
+class TemporaryFileGuard {
+ public:
+  explicit TemporaryFileGuard(std::filesystem::path path) : path_(std::move(path)) {}
+
+  ~TemporaryFileGuard() {
+    if (!active_) return;
+    std::error_code ignored;
+    std::filesystem::remove(path_, ignored);
+  }
+
+  [[nodiscard]] const std::filesystem::path& path() const { return path_; }
+  void release() noexcept { active_ = false; }
+
+ private:
+  std::filesystem::path path_;
+  bool active_ = true;
+};
+
+bool replace_file(const std::filesystem::path& temporary,
+                  const std::filesystem::path& destination) {
+#ifdef _WIN32
+  return MoveFileExW(temporary.c_str(), destination.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+  std::error_code error;
+  std::filesystem::rename(temporary, destination, error);
+  return !error;
+#endif
+}
+
 }  // namespace
 
 FormulaOverrideSnapshotStatus save_formula_override_snapshot(
     const FormulaOverrideStore& store, const std::filesystem::path& path) {
-  const auto temporary = path.string() + ".tmp";
-  std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-  if (!output) return FormulaOverrideSnapshotStatus::IoError;
-  const auto snapshot = store.snapshot();
-  output << kMagic << snapshot.overrides.size() << '\n';
-  for (const auto& record : snapshot.overrides) {
-    if (!write_record(output, record)) return FormulaOverrideSnapshotStatus::IoError;
-  }
-  output.close();
-  if (!output) return FormulaOverrideSnapshotStatus::IoError;
+  try {
+    const auto temporary = make_temporary_path(path);
+    if (!temporary.has_value()) return FormulaOverrideSnapshotStatus::IoError;
+    TemporaryFileGuard cleanup(*temporary);
 
-  std::ifstream payload_input(temporary, std::ios::binary);
-  const std::string payload{std::istreambuf_iterator<char>(payload_input), {}};
-  if (!payload_input.good() && !payload_input.eof()) {
+    std::ofstream output(cleanup.path(), std::ios::binary | std::ios::trunc);
+    if (!output) return FormulaOverrideSnapshotStatus::IoError;
+    const auto snapshot = store.snapshot();
+    output << kMagic << snapshot.overrides.size() << '\n';
+    for (const auto& record : snapshot.overrides) {
+      if (!write_record(output, record)) return FormulaOverrideSnapshotStatus::IoError;
+    }
+    output.close();
+    if (!output) return FormulaOverrideSnapshotStatus::IoError;
+
+    std::ifstream payload_input(cleanup.path(), std::ios::binary);
+    const std::string payload{std::istreambuf_iterator<char>(payload_input), {}};
+    if (!payload_input.good() && !payload_input.eof()) {
+      return FormulaOverrideSnapshotStatus::IoError;
+    }
+    std::ofstream checksum_output(cleanup.path(), std::ios::binary | std::ios::app);
+    checksum_output << "CHECKSUM " << checksum(payload) << '\n';
+    checksum_output.close();
+    if (!checksum_output) return FormulaOverrideSnapshotStatus::IoError;
+
+    if (!replace_file(cleanup.path(), path)) return FormulaOverrideSnapshotStatus::IoError;
+    cleanup.release();
+    return FormulaOverrideSnapshotStatus::Confirmed;
+  } catch (...) {
     return FormulaOverrideSnapshotStatus::IoError;
   }
-  std::ofstream checksum_output(temporary, std::ios::binary | std::ios::app);
-  checksum_output << "CHECKSUM " << checksum(payload) << '\n';
-  checksum_output.close();
-  if (!checksum_output) return FormulaOverrideSnapshotStatus::IoError;
-
-  std::error_code error;
-  std::filesystem::rename(temporary, path, error);
-  if (error) {
-    std::filesystem::remove(temporary);
-    return FormulaOverrideSnapshotStatus::IoError;
-  }
-  return FormulaOverrideSnapshotStatus::Confirmed;
 }
 
 FormulaOverrideSnapshotStatus load_formula_override_snapshot(
     FormulaOverrideStore& store, const std::filesystem::path& path) {
-  std::ifstream source(path, std::ios::binary);
-  if (!source) return FormulaOverrideSnapshotStatus::IoError;
-  const std::string file{std::istreambuf_iterator<char>(source), {}};
+  std::string file;
+  switch (read_snapshot_file(path, file)) {
+    case SnapshotFileReadStatus::Confirmed:
+      break;
+    case SnapshotFileReadStatus::IoError:
+      return FormulaOverrideSnapshotStatus::IoError;
+    case SnapshotFileReadStatus::TooLarge:
+      return FormulaOverrideSnapshotStatus::InvalidSnapshot;
+  }
   const auto marker = file.rfind("CHECKSUM ");
   if (marker == std::string::npos || marker == 0 || file[marker - 1] != '\n') {
     return FormulaOverrideSnapshotStatus::InvalidSnapshot;
   }
   std::uint64_t stored_checksum = 0;
-  std::istringstream checksum_input(file.substr(marker + 9));
-  std::string trailing_checksum_data;
-  if (!(checksum_input >> stored_checksum) ||
-      (checksum_input >> trailing_checksum_data) ||
+  if (!parse_checksum_suffix(std::string_view{file}.substr(marker + 9),
+                             stored_checksum) ||
       checksum(file.substr(0, marker)) != stored_checksum) {
     return FormulaOverrideSnapshotStatus::InvalidSnapshot;
   }

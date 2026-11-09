@@ -26,6 +26,9 @@ struct FormulaSpec {
 [[nodiscard]] FormulaSpec make_power_offset_spec(BigInt base, BigInt scale,
                                                   std::uint32_t version);
 [[nodiscard]] std::string canonical_formula_identity(const FormulaSpec& spec);
+[[nodiscard]] ComputationIdentity canonical_computation_identity(
+    const FormulaSpec& spec);
+[[nodiscard]] bool valid_formula_spec(const FormulaSpec& spec);
 
 [[nodiscard]] EvaluationResult evaluate_power_offset(
     const FormulaSpec& spec, const FormulaAddress& address,

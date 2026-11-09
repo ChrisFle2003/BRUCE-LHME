@@ -1,22 +1,19 @@
-# Konzepte und Entwürfe
+# Umgesetzte Komponenten
 
-**DOKUMENTIERT / KONZEPT.** Diese Dateien bewahren fachliche Entwürfe. Sie sind
-keine Aussage darüber, dass die beschriebenen Komponenten im aktuellen C++-Kern
-implementiert oder getestet sind. Den belastbaren Bestand beschreibt die
-[implementierte Architektur](../docs/architecture.md).
+Dieses Verzeichnis enthält keine unveröffentlichten Architekturentwürfe. Die
+öffentliche Dokumentation beschreibt ausschließlich Komponenten, die im
+aktuellen C++-Quellcode und den zugehörigen Tests vorhanden sind.
 
-| Dokument | Thema |
-| --- | --- |
-| [BRUCE 8×8 Bit](bruce-8x8-bit.md) | früher C++-Blueprint und Pipeline |
-| [BRUCE Scope-Korrektur](bruce-scope-correction.md) | Abgrenzung, Dienste und Zähler |
-| [Lazy Parameter Grid V1](lazy-parameter-grid-v1.md) | begrenzte Parameterraumsuche |
-| [Lazy Hierarchical Memory Engine](lazy-hierarchical-memory-engine.md) | formelbasierter Speicher, Tiles und hierarchische Reduktion |
-| [KEVIN Grid Engine V1](kevin-grid-engine-v1.md) | Grid-Adressen, Werte und Cache |
-| [KEVIN Grid Notizen](kevin-grid-engine-notes.txt) | Präzisierungen zum Grid |
-| [NanoCell – deterministisch](nanocell-deterministic-concept.md) | NanoCell-Entwurf |
-| [NanoCell – Agenda](nanocell-agenda.txt) | offene NanoCell-Themen |
-| [Final Upgrade](final-upgrade.md) | Gate- und Expansionsideen |
-| [Affine Phase-DAG](affine-phase-dag.md) | Provenienz und Phasen-Graph |
+| Komponente | Nachweis im Repository | Dokumentation |
+| --- | --- | --- |
+| Formula-Auswertung und Technique-Kernels | `include/bruce/lhme/formula.hpp`, `include/bruce/lhme/technique.hpp`, `src/core/` | [Architektur](../docs/architecture.md), [Kernel SDK](../docs/kernel-sdk.md) |
+| Engine, Result-Cache und Cancellation | `include/bruce/lhme/engine.hpp`, `include/bruce/lhme/cache.hpp`, `src/engine.cpp`, `src/cache/` | [Architektur](../docs/architecture.md) |
+| Sparse Formula-Overrides und Snapshots | `include/bruce/lhme/formula_override_store.hpp`, `include/bruce/lhme/formula_override_snapshot.hpp` | [Architektur](../docs/architecture.md) |
+| KEVIN-Domainprojektion und Filter | `include/bruce/lhme/kevin_domain.hpp`, `include/bruce/lhme/domain_projection.hpp`, `include/bruce/lhme/kevin_filter.hpp`, `src/kevin/` | [Architektur](../docs/architecture.md), [KEVIN Memory Store](../docs/kevin-memory-store.md) |
+| CPU-Streaming und Scheduler | `include/bruce/lhme/streaming.hpp`, `src/cpu/` | [Architektur](../docs/architecture.md) |
+| GGUF Inspector | `include/bruce/lhme/gguf_inspector.hpp`, `src/gguf/` | [GGUF Inspector V1](../docs/gguf-inspector.md) |
+| Öffentliche C- und C++-Schnittstellen | `include/bruce/lhme/c_api.h`, `include/bruce/lhme/kernel_sdk.hpp` | [C ABI](../docs/c-api.md), [Kernel SDK](../docs/kernel-sdk.md) |
 
-Die Roadmap verweist auf diese Ablage als Quellenkontext; Konfliktauflösungen
-werden erst durch Verträge, ADRs und geprüfte Umsetzung verbindlich.
+NanoCell, semantisches Routing, AnswerPoints, Experience Records, GPU-Backends
+und weitere nicht implementierte Forschungs- oder Produktentwürfe sind nicht
+Teil dieses öffentlichen Repositories.

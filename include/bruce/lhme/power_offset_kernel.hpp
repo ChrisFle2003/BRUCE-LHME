@@ -1,10 +1,12 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
+#include "bruce/lhme/cache_equivalence.hpp"
 #include "bruce/lhme/technique.hpp"
 
 namespace bruce::lhme {
@@ -28,9 +30,17 @@ struct PowerOffsetParameters {
 [[nodiscard]] std::optional<PowerOffsetParameters> parse_power_offset_parameters(
     std::string_view parameters);
 
+// The version must match PowerOffsetKernel::identity().version; otherwise the
+// helper throws std::invalid_argument rather than creating a false equivalence.
+[[nodiscard]] ExactFormulaTechniqueCacheBinding
+make_power_offset_exact_cache_binding(const BigInt& base, const BigInt& scale,
+                                      std::uint32_t version);
+
 class PowerOffsetKernel final : public TechniqueKernel {
  public:
   [[nodiscard]] TechniqueIdentity identity() const override;
+  [[nodiscard]] std::optional<ComputationIdentity>
+  canonical_computation_identity(const TechniqueRequest& request) const override;
   [[nodiscard]] EvaluationResult evaluate(
       const TechniqueRequest& request) const override;
 };

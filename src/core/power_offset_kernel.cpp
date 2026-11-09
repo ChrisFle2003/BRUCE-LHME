@@ -74,8 +74,32 @@ std::optional<PowerOffsetParameters> parse_power_offset_parameters(
   return PowerOffsetParameters{.base = base, .scale = scale};
 }
 
+ExactFormulaTechniqueCacheBinding make_power_offset_exact_cache_binding(
+    const BigInt& base, const BigInt& scale, std::uint32_t version) {
+  const PowerOffsetKernel kernel;
+  const auto identity = kernel.identity();
+  if (version != identity.version) {
+    throw std::invalid_argument(
+        "power-offset cache binding version must match kernel identity");
+  }
+  return {.technique = identity,
+          .accepted_parameters = encode_power_offset_parameters(base, scale),
+          .formula = make_power_offset_spec(base, scale, version)};
+}
+
 TechniqueIdentity PowerOffsetKernel::identity() const {
   return {.id = "bruce.power_offset", .version = 1};
+}
+
+std::optional<ComputationIdentity>
+PowerOffsetKernel::canonical_computation_identity(
+    const TechniqueRequest& request) const {
+  if (request.identity != identity()) return std::nullopt;
+  const auto parameters = parse_power_offset_parameters(request.parameters);
+  if (!parameters.has_value()) return std::nullopt;
+  return bruce::lhme::canonical_computation_identity(
+      make_power_offset_spec(parameters->base, parameters->scale,
+                             request.identity.version));
 }
 
 EvaluationResult PowerOffsetKernel::evaluate(const TechniqueRequest& request) const {

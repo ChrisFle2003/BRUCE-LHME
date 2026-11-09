@@ -52,6 +52,12 @@ EvaluationResult invalid_result(EvaluationMode mode, const char* reason) {
   return result;
 }
 
+EvaluationResult within_trace_budget(EvaluationResult result,
+                                     const Budget& budget) {
+  enforce_trace_budget(result, budget.max_trace_bytes);
+  return result;
+}
+
 EvaluationResult override_result(const BigInt& value, EvaluationMode mode,
                                  const Budget& budget,
                                  const std::optional<BigInt>& modulus) {
@@ -100,14 +106,7 @@ bool valid_formula_binding(const FormulaBinding& binding) {
       [](const auto& value) {
         using Binding = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Binding, FormulaSpec>) {
-          if (value.operation != FormulaOperation::PowerOffset ||
-              value.base <= 0 || value.scale < 0 ||
-              !value.nonnegative_index || value.version == 0) {
-            return false;
-          }
-          const auto canonical =
-              make_power_offset_spec(value.base, value.scale, value.version);
-          return value.specification_hash == canonical.specification_hash;
+          return valid_formula_spec(value);
         } else {
           return valid_technique_identity(value.identity) &&
                  !value.canonical_parameters.empty() &&
@@ -152,7 +151,9 @@ bool FormulaOverrideStore::remove_override(const FormulaBinding& binding,
 
 FormulaValue FormulaOverrideStore::evaluate(const FormulaOverrideRequest& request) {
   if (!valid_formula_binding(request.binding)) {
-    return {.result = invalid_result(request.mode, "formula binding is invalid")};
+    return {.result = within_trace_budget(
+                invalid_result(request.mode, "formula binding is invalid"),
+                request.budget)};
   }
 
   std::optional<BigInt> override_value;
@@ -166,8 +167,10 @@ FormulaValue FormulaOverrideStore::evaluate(const FormulaOverrideRequest& reques
     if (const auto* technique = std::get_if<TechniqueBinding>(&request.binding)) {
       effective_budget = stricter_budget(effective_budget, technique->default_budget);
     }
-    return {.result = override_result(*override_value, request.mode, effective_budget,
-                                      request.modulus),
+    return {.result = within_trace_budget(
+                override_result(*override_value, request.mode, effective_budget,
+                                request.modulus),
+                effective_budget),
             .source = FormulaValueSource::Override};
   }
 

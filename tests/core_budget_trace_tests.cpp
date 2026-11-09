@@ -123,3 +123,31 @@ TEST(trace_budget_can_stop_evaluation_before_trace_allocation) {
   CHECK(result.status == bruce::lhme::Status::BudgetExceeded);
   CHECK(result.trace == nullptr);
 }
+
+TEST(trace_budget_accepts_an_exactly_sized_empty_formula_trace) {
+  auto trace_limited = request(bruce::lhme::EvaluationMode::Exact, 10);
+  const auto trace = bruce::lhme::make_trace({});
+  // The empty trace contains its ID plus the two 8-byte length/count fields.
+  const auto exact_trace_budget = bruce::lhme::trace_budget_bytes(*trace);
+  CHECK(exact_trace_budget == 16 + trace->id.size());
+  trace_limited.budget.max_trace_bytes = exact_trace_budget;
+
+  const auto result = bruce::lhme::evaluate(trace_limited);
+
+  CHECK(result.status == bruce::lhme::Status::Confirmed);
+  CHECK(result.trace != nullptr);
+  CHECK(result.trace->events.empty());
+}
+
+TEST(trace_budget_rejects_an_empty_formula_trace_that_is_one_byte_too_large) {
+  auto trace_limited = request(bruce::lhme::EvaluationMode::Exact, 10);
+  const auto exact_trace_budget =
+      bruce::lhme::trace_budget_bytes(*bruce::lhme::make_trace({}));
+  trace_limited.budget.max_trace_bytes = exact_trace_budget - 1;
+
+  const auto result = bruce::lhme::evaluate(trace_limited);
+
+  CHECK(result.status == bruce::lhme::Status::BudgetExceeded);
+  CHECK(!result.integer.has_value());
+  CHECK(result.trace == nullptr);
+}

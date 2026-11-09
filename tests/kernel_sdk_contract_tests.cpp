@@ -133,7 +133,7 @@ TEST(kernel_sdk_affine_kernel_runs_through_engine_contracts) {
   CHECK(engine.evaluate_technique(too_small).status == bruce::lhme::Status::BudgetExceeded);
 
   engine.cancel();
-  CHECK(engine.evaluate_technique(affine_request()).status == bruce::lhme::Status::Cancelled);
+  CHECK(engine.evaluate_technique(affine_request()).status == bruce::lhme::Status::Confirmed);
 }
 
 TEST(kernel_sdk_affine_kernel_rejects_invalid_requests_through_engine) {

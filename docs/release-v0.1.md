@@ -1,5 +1,9 @@
 # BRUCE LHME v0.1 — Release Contract
 
+> **Historisches Dokument.** Die aktive Release-, ABI- und Gate-Policy ist
+> [v0.2.0](release-v0.2.md). Die nachfolgenden v0.1-Gates sind kein aktueller
+> Freigabestatus für v0.2.0.
+
 ## Scope
 
 Version 0.1 is a CPU-and-RAM C++20 library. Its stable public boundary is:
@@ -24,9 +28,11 @@ projection.
 
 ## Stable v0.1 guarantees
 
-- `PowerOffset` FormulaRecipes with a positive base, non-negative scale,
-  non-negative address contract and a non-zero version are accepted only when
-  their specification hash is canonical.
+- `Engine::register_formula()` and `FormulaOverrideStore` accept a
+  `PowerOffset` FormulaRecipe only with a positive base, non-negative scale,
+  non-negative address contract, non-zero version and a canonical
+  specification hash. An unregistered or non-canonical spec evaluates through
+  `Engine` as `InvalidArgument`.
 - Formula overrides are sparse, synchronized and isolated by their canonical
   formula or technique identity.
 - Override snapshots are fail-closed: format, record count, canonical integer
@@ -38,6 +44,12 @@ projection.
   global execution stop.
 - Each domain evaluation trace identifies its Domain, Projection and resulting
   FormulaAddress.
+- `Budget::max_trace_bytes` is a hard limit for Formula and `Engine` results,
+  including traces returned by a registered kernel. Its platform-independent
+  accounting is 8 bytes for the trace-ID length plus its string bytes, 8 bytes
+  for the event count, then 1 scope byte, 1 status byte, 8 reason-length bytes
+  and the reason-string bytes per event. An over-budget trace returns
+  `BudgetExceeded` without a partial success trace.
 
 `KevinMemoryStore` is preserved as a documented compatibility boundary for
 older callers. New integrations should use FormulaRecipe plus
@@ -66,7 +78,7 @@ When an instrumented run is hosted under `ptrace` and LeakSanitizer reports its
 known incompatibility, use `ASAN_OPTIONS=detect_leaks=0` only for that local
 AddressSanitizer run. CI must retain leak detection.
 
-## Verified locally
+## Verified locally (historical baseline before snapshot stabilization)
 
 - GNU C++ 14.2 on Linux: complete Debug profile, 42/42 tests.
 - GNU C++ 14.2 on Linux: complete Release profile, 42/42 tests.
@@ -80,7 +92,12 @@ AddressSanitizer run used `ASAN_OPTIONS=detect_leaks=0` because this host
 monitors processes with `ptrace`, an environment in which LeakSanitizer is not
 reliable.
 
-## Still required before a public v0.1 tag
+The current source tree additionally registers the read-only
+`cmake_presets_contract` script as a CTest test. Consequently, the historical
+42/42 result is not a verification claim for the current tree; the complete
+suite must be rerun after the snapshot-stabilization changes.
+
+## Historische Gates vor einem öffentlichen v0.1-Tag
 
 1. Repeat the AddressSanitizer profile with LeakSanitizer enabled on a host
    that permits it.
