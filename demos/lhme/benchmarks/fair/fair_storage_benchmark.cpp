@@ -3,10 +3,15 @@
 #include "benchmark_contract.hpp"
 #include "fair_isolated_memory.hpp"
 #include "fair_storage.hpp"
+#include "benchmark_output.hpp"
 
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <iostream>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -25,7 +30,8 @@ using namespace bruce::lhme::benchmark::fair;
 }
 
 [[nodiscard]] bool run_case(demo::Report& report, FairBenchmarkConfig config,
-                            StorageStrategyKind strategy, WorkloadKind kind) {
+                            StorageStrategyKind strategy, WorkloadKind kind,
+                            benchmark::output::RawCsvWriter* raw_output) {
   const auto workload = make_workload(config, kind);
   if (!workload.has_value()) return false;
   const auto build_started = std::chrono::steady_clock::now();
@@ -35,7 +41,12 @@ using namespace bruce::lhme::benchmark::fair;
   if (!storage.has_value() || !verify_workload(*storage, *workload)) return false;
   if (!verify_workload(*storage, *workload)) return false;  // excluded warm-up
 
-  std::vector<std::uint64_t> samples;
+  const auto label = storage_case_label(*storage) + " " + workload_name(kind);
+  const auto case_id = storage_case_label(*storage) + "." + workload_name(kind);
+  const auto notes = "records=" + std::to_string(config.record_count) +
+      ";queries=" + std::to_string(config.query_count) + ";seed=" +
+      std::to_string(config.seed) + ";fixed workload checksum";
+  std::vector<double> samples;
   samples.reserve(kTimedSampleCount);
   for (std::size_t sample = 0; sample < kTimedSampleCount; ++sample) {
     const auto started = std::chrono::steady_clock::now();
@@ -46,21 +57,35 @@ using namespace bruce::lhme::benchmark::fair;
       checksum ^= mix(address ^ *value);
     }
     if (checksum == 0 && !workload->addresses.empty()) return false;
-    samples.push_back(static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - started).count()));
+    const auto elapsed = std::chrono::duration<double, std::micro>(
+        std::chrono::steady_clock::now() - started).count();
+    samples.push_back(elapsed);
+    if (raw_output != nullptr && !raw_output->write({
+          .benchmark = "lhme_fair_storage_benchmark",
+          .case_id = case_id,
+          .metric = "lookup_elapsed",
+          .iteration = sample + 1U,
+          .unit = "us/workload",
+          .value = elapsed,
+          .validation = "confirmed",
+          .notes = notes,
+        })) {
+      return false;
+    }
   }
-  const auto summary = summarize_samples(samples);
+  const auto summary = benchmark::statistics::summarize(samples);
   const auto peak = measure_storage_peak(config, strategy, *workload);
   if (!summary.has_value() || !peak.success) return false;
 
-  const auto label = storage_case_label(*storage) + " " + workload_name(kind);
   report.row(label + " domain", std::to_string(config.record_count));
   report.row(label + " seed", std::to_string(config.seed));
   report.row(label + " build microseconds", std::to_string(build_elapsed));
-  report.row(label + " lookup minimum microseconds", std::to_string(summary->minimum_microseconds));
-  report.row(label + " lookup median microseconds", std::to_string(summary->median_microseconds));
-  report.row(label + " lookup maximum microseconds", std::to_string(summary->maximum_microseconds));
+  report.row(label + " lookup minimum microseconds", std::to_string(summary->minimum));
+  report.row(label + " lookup median microseconds", std::to_string(summary->median));
+  report.row(label + " lookup mean microseconds", std::to_string(summary->mean));
+  report.row(label + " lookup maximum microseconds", std::to_string(summary->maximum));
+  report.row(label + " lookup sample standard deviation microseconds",
+             std::to_string(summary->standard_deviation));
   report.row(label + (peak.available ? " peak RAM bytes" : " peak RAM unavailable"),
              peak.available ? std::to_string(peak.bytes) : "unavailable");
   return true;
@@ -69,9 +94,30 @@ using namespace bruce::lhme::benchmark::fair;
 }  // namespace
 
 int main(int argc, char* argv[]) {
-  const bool full = argc == 2 && std::string_view{argv[1]} == "--full";
-  const bool quick = argc == 2 && std::string_view{argv[1]} == "--quick";
-  if (argc != 1 && !full && !quick) return 1;
+  bool full = false;
+  bool quick = false;
+  std::optional<std::filesystem::path> raw_path;
+  for (int index = 1; index < argc; ++index) {
+    const std::string_view argument{argv[index]};
+    if (argument == "--full" && !full && !quick) {
+      full = true;
+    } else if (argument == "--quick" && !full && !quick) {
+      quick = true;
+    } else if (argument == "--csv" && index + 1 < argc && !raw_path.has_value()) {
+      raw_path = std::filesystem::path{argv[++index]};
+    } else {
+      std::cerr << "usage: lhme_fair_storage_benchmark [--quick|--full] [--csv FILE]\n";
+      return 2;
+    }
+  }
+  std::optional<benchmark::output::RawCsvWriter> raw_output;
+  if (raw_path.has_value()) {
+    raw_output.emplace(*raw_path);
+    if (!raw_output->good()) {
+      std::cerr << "--csv must name a new writable output file\n";
+      return 2;
+    }
+  }
 
   demo::Report report;
   report.heading("LHME Fair Storage Comparison");
@@ -104,10 +150,15 @@ int main(int argc, char* argv[]) {
                                          .override_count = overrides,
                                          .seed = 0x4252554345ULL};
         for (const auto workload : workloads) {
-          report.expect_true("fair storage case", run_case(report, config, strategy, workload));
+          report.expect_true("fair storage case",
+                             run_case(report, config, strategy, workload,
+                                      raw_output ? &*raw_output : nullptr));
         }
       }
     }
+  }
+  if (raw_output.has_value()) {
+    report.expect_true("fair storage raw CSV write", raw_output->good());
   }
   return report.finish();
 }

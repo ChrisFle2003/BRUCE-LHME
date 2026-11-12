@@ -1,5 +1,6 @@
 #include "demo_report.hpp"
 
+#include "benchmark_output.hpp"
 #include "bruce/lhme/formula_override_snapshot.hpp"
 #include "bruce/lhme/formula_override_store.hpp"
 #include "table_storage.hpp"
@@ -7,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -29,16 +31,20 @@ struct Measurement {
   std::string failure_reason;
   std::uint64_t override_count = 0;
   std::uint64_t snapshot_bytes = 0;
-  std::int64_t insert_milliseconds = 0;
+  double insert_milliseconds = 0.0;
   std::uint64_t computed_exact_evaluations = 0;
 };
 
-[[nodiscard]] std::filesystem::path snapshot_path(std::uint64_t override_count) {
+[[nodiscard]] std::filesystem::path snapshot_path(std::uint64_t override_count,
+                                                   std::size_t iteration) {
   return std::filesystem::temp_directory_path() /
-         ("bruce-hybrid-" + std::to_string(override_count) + ".snapshot");
+         ("bruce-hybrid-" + std::to_string(override_count) + "-" +
+          std::to_string(iteration) + "-" +
+          std::to_string(Clock::now().time_since_epoch().count()) + ".snapshot");
 }
 
-[[nodiscard]] Measurement measure_tier(std::uint64_t override_count) {
+[[nodiscard]] Measurement measure_tier(std::uint64_t override_count,
+                                       std::size_t iteration) {
   using namespace bruce::lhme;
   auto engine = Engine::create({});
   const auto binding = engine.register_formula(make_power_offset_spec(2, 100, 1));
@@ -54,8 +60,7 @@ struct Measurement {
       return {.failure_reason = "override insertion failed"};
     }
   }
-  const auto inserted = std::chrono::duration_cast<std::chrono::milliseconds>(
-      Clock::now() - started);
+  const auto inserted = std::chrono::duration<double, std::milli>(Clock::now() - started);
 
   if (override_count != 0) {
     const auto override = store.evaluate({.binding = binding,
@@ -79,9 +84,11 @@ struct Measurement {
     }
   }
 
-  const auto path = snapshot_path(override_count);
+  const auto path = snapshot_path(override_count, iteration);
   std::error_code error;
-  std::filesystem::remove(path, error);
+  if (std::filesystem::exists(path, error) || error) {
+    return {.failure_reason = "unique snapshot path is unavailable"};
+  }
   if (save_formula_override_snapshot(store, path) !=
       FormulaOverrideSnapshotStatus::Confirmed) {
     return {.failure_reason = "snapshot write failed"};
@@ -101,16 +108,52 @@ struct Measurement {
           .computed_exact_evaluations = statistics.computed_exact_evaluation_count};
 }
 
+[[nodiscard]] bool parse_positive(std::string_view text, std::size_t& value) {
+  try {
+    std::size_t consumed = 0U;
+    const auto parsed = std::stoull(std::string{text}, &consumed);
+    if (consumed != text.size() || parsed == 0U) return false;
+    value = static_cast<std::size_t>(parsed);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
   using namespace bruce::lhme;
 
   bool include_full_override_tier = false;
-  if (argc == 2 && std::string_view{argv[1]} == "--full-overrides") {
-    include_full_override_tier = true;
-  } else if (argc != 1) {
-    return 1;
+  std::size_t iterations = 3U;
+  std::optional<std::filesystem::path> raw_path;
+  for (int index = 1; index < argc; ++index) {
+    const std::string_view argument{argv[index]};
+    if (argument == "--full-overrides" && !include_full_override_tier) {
+      include_full_override_tier = true;
+    } else if (argument == "--quick") {
+      iterations = 1U;
+    } else if (argument == "--iterations" && index + 1 < argc) {
+      if (!parse_positive(argv[++index], iterations)) {
+        std::cerr << "--iterations requires a positive integer\n";
+        return 2;
+      }
+    } else if (argument == "--csv" && index + 1 < argc && !raw_path.has_value()) {
+      raw_path = std::filesystem::path{argv[++index]};
+    } else {
+      std::cerr << "usage: lhme_hybrid_storage_benchmark [--quick] [--iterations N] "
+                   "[--full-overrides] [--csv FILE]\n";
+      return 2;
+    }
+  }
+  std::optional<benchmark::output::RawCsvWriter> raw_output;
+  if (raw_path.has_value()) {
+    raw_output.emplace(*raw_path);
+    if (!raw_output->good()) {
+      std::cerr << "--csv must name a new writable output file\n";
+      return 2;
+    }
   }
 
   demo::Report report;
@@ -130,26 +173,75 @@ int main(int argc, char* argv[]) {
 
   std::optional<std::uint64_t> previous_snapshot_bytes;
   for (const auto tier : tiers) {
-    const auto measurement = measure_tier(tier.override_count);
     const auto label = "FormulaWithOverrides " + std::string{tier.name};
-    report.row(label + " overrides", std::to_string(measurement.override_count));
-    report.row(label + " snapshot bytes", std::to_string(measurement.snapshot_bytes));
-    report.row(label + " override insert milliseconds",
-               std::to_string(measurement.insert_milliseconds));
-    if (!measurement.success) {
-      report.row(label + " failure reason", measurement.failure_reason);
+    const auto warmup = measure_tier(tier.override_count, 0U);
+    report.expect_true(label + " warm-up completed", warmup.success);
+
+    std::vector<double> insertion_samples;
+    std::vector<double> snapshot_samples;
+    insertion_samples.reserve(iterations);
+    snapshot_samples.reserve(iterations);
+    std::optional<Measurement> representative;
+    for (std::size_t iteration = 0U; iteration < iterations; ++iteration) {
+      const auto measurement = measure_tier(tier.override_count, iteration + 1U);
+      report.expect_true(label + " benchmark completed", measurement.success);
+      if (!measurement.success) {
+        report.row(label + " failure reason", measurement.failure_reason);
+        continue;
+      }
+      report.expect_equal(label + " sample override count", tier.override_count,
+                          measurement.override_count);
+      report.expect_equal(label + " sample computed exact evaluations", std::uint64_t(0),
+                          measurement.computed_exact_evaluations);
+      if (!representative.has_value()) representative = measurement;
+      report.expect_equal(label + " deterministic snapshot bytes",
+                          representative->snapshot_bytes, measurement.snapshot_bytes);
+      insertion_samples.push_back(measurement.insert_milliseconds);
+      snapshot_samples.push_back(static_cast<double>(measurement.snapshot_bytes));
+      if (raw_output.has_value() &&
+          (!raw_output->write({.benchmark = "lhme_hybrid_storage_benchmark",
+                               .case_id = "formula-overrides-" +
+                                   std::to_string(tier.override_count),
+                               .metric = "override_insert_elapsed",
+                               .iteration = iteration + 1U,
+                               .unit = "ms/insert-set",
+                               .value = measurement.insert_milliseconds,
+                               .validation = "confirmed",
+                               .notes = "store construction and snapshot I/O excluded"}) ||
+           !raw_output->write({.benchmark = "lhme_hybrid_storage_benchmark",
+                               .case_id = "formula-overrides-" +
+                                   std::to_string(tier.override_count),
+                               .metric = "snapshot_size",
+                               .iteration = iteration + 1U,
+                               .unit = "bytes",
+                               .value = static_cast<double>(measurement.snapshot_bytes),
+                               .validation = "confirmed",
+                               .notes = "ASCII snapshot bytes; not RAM"}))) {
+        report.expect_true(label + " raw CSV write", false);
+      }
     }
-    report.expect_true(label + " benchmark completed", measurement.success);
-    report.expect_equal(label + " override count", tier.override_count,
-                        measurement.override_count);
-    report.expect_true(label + " snapshot exists", measurement.snapshot_bytes > 0);
-    report.expect_equal(label + " computed exact evaluations", std::uint64_t(0),
-                        measurement.computed_exact_evaluations);
+    const auto insertion_summary = benchmark::output::format_summary(
+        insertion_samples, "ms/insert-set");
+    const auto snapshot_summary = benchmark::output::format_summary(snapshot_samples, "bytes");
+    report.expect_true(label + " insertion summary available", insertion_summary.has_value());
+    report.expect_true(label + " snapshot summary available", snapshot_summary.has_value());
+    if (!representative.has_value() || !insertion_summary.has_value() ||
+        !snapshot_summary.has_value()) {
+      continue;
+    }
+    report.row(label + " overrides", std::to_string(representative->override_count));
+    report.row(label + " insert statistics", *insertion_summary);
+    report.row(label + " snapshot size statistics", *snapshot_summary);
+    report.expect_true(label + " snapshot exists", representative->snapshot_bytes > 0);
     if (previous_snapshot_bytes.has_value()) {
       report.expect_true(label + " snapshot grows with exceptions",
-                         measurement.snapshot_bytes > *previous_snapshot_bytes);
+                         representative->snapshot_bytes > *previous_snapshot_bytes);
     }
-    previous_snapshot_bytes = measurement.snapshot_bytes;
+    previous_snapshot_bytes = representative->snapshot_bytes;
+  }
+
+  if (raw_output.has_value()) {
+    report.expect_true("hybrid storage raw CSV write", raw_output->good());
   }
 
   return report.finish();

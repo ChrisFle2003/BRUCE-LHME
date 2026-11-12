@@ -1,13 +1,18 @@
 #include "demo_report.hpp"
 
+#include "benchmark_output.hpp"
 #include "isolated_runner.hpp"
 #include "stress_scenarios.hpp"
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #if defined(__linux__)
 #include <cerrno>
@@ -85,25 +90,76 @@ void report_adaptive_expectations(Report& report, const ChildReport& child_repor
                       child_report.retention_mode);
 }
 
-void report_isolated_run(Report& report, Scenario scenario,
-                         const IsolatedRunResult& run) {
+[[nodiscard]] bool report_repeated_isolated_runs(
+    Report& report, Scenario scenario, std::size_t iterations,
+    bruce::lhme::benchmark::output::RawCsvWriter* raw_output) {
   const auto name = bruce::lhme::demo::stress::scenario_name(scenario);
-  report.expect_true(std::string{name} + " isolated measurement available",
-                     run.available);
-  report.expect_true(std::string{name} + " isolated child valid", run.success);
-  if (!run.success) return;
+  const auto warmup = bruce::lhme::demo::stress::run_isolated("/proc/self/exe", scenario);
+  report.expect_true(std::string{name} + " warm-up available", warmup.available);
+  report.expect_true(std::string{name} + " warm-up valid", warmup.success);
 
-  report.row(std::string{name} + " milliseconds",
-             std::to_string(run.report.elapsed_milliseconds));
-  report.row(std::string{name} + " isolated process peak RAM bytes",
-             std::to_string(run.report.peak_bytes));
-  report.expect_true(std::string{name} + " positive peak", run.report.peak_bytes > 0);
+  std::vector<double> elapsed_samples;
+  std::vector<double> peak_samples;
+  elapsed_samples.reserve(iterations);
+  peak_samples.reserve(iterations);
+  std::optional<IsolatedRunResult> representative;
+  for (std::size_t iteration = 0U; iteration < iterations; ++iteration) {
+    const auto run = bruce::lhme::demo::stress::run_isolated("/proc/self/exe", scenario);
+    report.expect_true(std::string{name} + " isolated measurement available", run.available);
+    report.expect_true(std::string{name} + " isolated child valid", run.success);
+    if (!run.success) continue;
+    if (!representative.has_value()) representative = run;
+    report.expect_equal(std::string{name} + " deterministic checked",
+                        representative->report.checked_count, run.report.checked_count);
+    report.expect_equal(std::string{name} + " deterministic exact evaluations",
+                        representative->report.exact_evaluation_count,
+                        run.report.exact_evaluation_count);
+    report.expect_equal(std::string{name} + " deterministic retained count",
+                        representative->report.retained_count, run.report.retained_count);
+    elapsed_samples.push_back(static_cast<double>(run.report.elapsed_milliseconds));
+    peak_samples.push_back(static_cast<double>(run.report.peak_bytes));
+    if (raw_output != nullptr &&
+        (!raw_output->write({.benchmark = "lhme_controlled_stress",
+                             .case_id = name,
+                             .metric = "elapsed",
+                             .iteration = iteration + 1U,
+                             .unit = "ms/scenario",
+                             .value = elapsed_samples.back(),
+                             .validation = "confirmed",
+                             .notes = "isolated Linux child; deterministic scenario counters"}) ||
+         !raw_output->write({.benchmark = "lhme_controlled_stress",
+                             .case_id = name,
+                             .metric = "peak_rss",
+                             .iteration = iteration + 1U,
+                             .unit = "bytes",
+                             .value = peak_samples.back(),
+                             .validation = "confirmed",
+                             .notes = "isolated Linux child high-water mark"}))) {
+      return false;
+    }
+  }
+  const auto elapsed_summary = bruce::lhme::benchmark::output::format_summary(
+      elapsed_samples, "ms/scenario");
+  const auto peak_summary = bruce::lhme::benchmark::output::format_summary(
+      peak_samples, "bytes");
+  report.expect_true(std::string{name} + " elapsed summary available",
+                     elapsed_summary.has_value());
+  report.expect_true(std::string{name} + " peak summary available", peak_summary.has_value());
+  if (!representative.has_value() || !elapsed_summary.has_value() ||
+      !peak_summary.has_value()) {
+    return false;
+  }
+  report.row(std::string{name} + " elapsed statistics", *elapsed_summary);
+  report.row(std::string{name} + " isolated process peak RAM statistics", *peak_summary);
+  report.expect_true(std::string{name} + " positive peak",
+                     representative->report.peak_bytes > 0);
 
   if (scenario == Scenario::AdaptiveHits) {
-    report_adaptive_expectations(report, run.report);
+    report_adaptive_expectations(report, representative->report);
   } else {
-    report_million_expectations(report, name, run.report);
+    report_million_expectations(report, name, representative->report);
   }
+  return true;
 }
 
 void report_safe_stop(Report& report) {
@@ -121,33 +177,42 @@ void report_safe_stop(Report& report) {
   report.expect_true("safe stop retains nothing", cancelled.retained_candidates.empty());
 }
 
-[[nodiscard]] int run_parent_controller() {
+[[nodiscard]] int run_parent_controller(
+    std::size_t iterations, bruce::lhme::benchmark::output::RawCsvWriter* raw_output) {
   Report report;
   report.heading("LHME Isolated CPU and Bounded-Retention Stress Test");
 
 #if defined(__linux__)
-  const auto first = bruce::lhme::demo::stress::run_isolated(
-      "/proc/self/exe", Scenario::MillionScanOne);
-  const auto eighth = bruce::lhme::demo::stress::run_isolated(
-      "/proc/self/exe", Scenario::MillionScanEight);
-  const auto adaptive = bruce::lhme::demo::stress::run_isolated(
-      "/proc/self/exe", Scenario::AdaptiveHits);
-  report_isolated_run(report, Scenario::MillionScanOne, first);
-  report_isolated_run(report, Scenario::MillionScanEight, eighth);
-  report_isolated_run(report, Scenario::AdaptiveHits, adaptive);
-  if (first.success && eighth.success) {
-    report.expect_equal("million scans checked deterministic", first.report.checked_count,
-                        eighth.report.checked_count);
-    report.expect_equal("million scans filtered deterministic",
-                        first.report.filtered_out_count,
-                        eighth.report.filtered_out_count);
-  }
+  report.expect_true("million-scan-1 repeated measurements",
+                     report_repeated_isolated_runs(report, Scenario::MillionScanOne,
+                                                    iterations, raw_output));
+  report.expect_true("million-scan-8 repeated measurements",
+                     report_repeated_isolated_runs(report, Scenario::MillionScanEight,
+                                                    iterations, raw_output));
+  report.expect_true("adaptive-hits repeated measurements",
+                     report_repeated_isolated_runs(report, Scenario::AdaptiveHits,
+                                                    iterations, raw_output));
 #else
   report.row("isolated process peak RAM bytes", "unavailable (Linux only)");
 #endif
 
   report_safe_stop(report);
+  if (raw_output != nullptr) {
+    report.expect_true("stress raw CSV write", raw_output->good());
+  }
   return report.finish();
+}
+
+[[nodiscard]] bool parse_positive(std::string_view text, std::size_t& value) {
+  try {
+    std::size_t consumed = 0U;
+    const auto parsed = std::stoull(std::string{text}, &consumed);
+    if (consumed != text.size() || parsed == 0U) return false;
+    value = static_cast<std::size_t>(parsed);
+    return true;
+  } catch (...) {
+    return false;
+  }
 }
 
 }  // namespace
@@ -162,6 +227,31 @@ int main(int argc, char* argv[]) {
     return 1;
 #endif
   }
-  if (argc != 1) return 1;
-  return run_parent_controller();
+  std::size_t iterations = 3U;
+  std::optional<std::filesystem::path> raw_path;
+  for (int index = 1; index < argc; ++index) {
+    const std::string_view argument{argv[index]};
+    if (argument == "--quick") {
+      iterations = 1U;
+    } else if (argument == "--iterations" && index + 1 < argc) {
+      if (!parse_positive(argv[++index], iterations)) {
+        std::cerr << "--iterations requires a positive integer\n";
+        return 2;
+      }
+    } else if (argument == "--csv" && index + 1 < argc && !raw_path.has_value()) {
+      raw_path = std::filesystem::path{argv[++index]};
+    } else {
+      std::cerr << "usage: lhme_controlled_stress [--quick] [--iterations N] [--csv FILE]\n";
+      return 2;
+    }
+  }
+  std::optional<bruce::lhme::benchmark::output::RawCsvWriter> raw_output;
+  if (raw_path.has_value()) {
+    raw_output.emplace(*raw_path);
+    if (!raw_output->good()) {
+      std::cerr << "--csv must name a new writable output file\n";
+      return 2;
+    }
+  }
+  return run_parent_controller(iterations, raw_output ? &*raw_output : nullptr);
 }
