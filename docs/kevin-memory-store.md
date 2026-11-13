@@ -96,8 +96,11 @@ Eingabereihenfolge und gibt die Kandidaten in genau dieser Reihenfolge zurück.
 `UInt64`-Werte gegen eine symbolische Formel-Rezeptur. `lhme_kevin_cpu_benchmark`
 misst separat die KEVIN-Filterpipeline für 64 Tiles (4.096 virtuelle Zellen) mit
 1, 2, 4 und 8 CPU-Workern. Er prüft dabei gleiche Überlebende und null Exact-
-Materialisierungen für jede Worker-Zahl und mittelt vier Durchläufe je persistentem
-Worker-Pool. Laufzeiten sind maschinenabhängig; die
+Materialisierungen für jede Worker-Zahl und verwendet begrenzte, transiente
+`std::async`-Batches; er instanziiert keinen `KevinTileCpuExecutor`. Standardmäßig
+führt er einen ungewerteten Warm-up-Lauf und elf unabhängige zeitgesteuerte
+Reduktionen je Worker-Zahl aus (drei mit `--quick`) und kann mit `--csv FILE`
+maschinenlesbare Samples schreiben. Laufzeiten sind maschinenabhängig; die
 deterministische Gleichheit von Kandidaten und Zählern ist der feste Vertrag.
 
 `lhme_hybrid_storage_benchmark` erweitert den Vergleich auf einen virtuellen

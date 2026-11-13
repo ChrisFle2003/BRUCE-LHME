@@ -127,12 +127,15 @@ Worker-Konfiguration; die anderen Zeitwerte sind einzelne Durchläufe.
 
 ## Verifikation
 
-Die vier als CTest registrierten Benchmarks wurden frisch im Release-Profil
-ausgeführt und bestanden: `lhme_streaming_benchmark`,
+Zum Zeitpunkt dieser historischen Erfassung wurden vier als CTest registrierte
+Benchmarks frisch im Release-Profil ausgeführt und bestanden:
+`lhme_streaming_benchmark`,
 `lhme_table_memory_benchmark`, `lhme_kevin_cpu_benchmark` und
 `lhme_hybrid_storage_benchmark` (4/4, 2.44 s). Zusätzlich wurden der
 Hybrid-Test mit `--full-overrides` sowie `lhme_controlled_stress` direkt
-ausgeführt; beide bestanden.
+ausgeführt; beide bestanden. Das aktuelle CMake registriert zusätzlich
+`lhme_fair_storage_benchmark`; diese archivierte Anzahl beschreibt daher nicht
+die aktuelle CI-Abdeckung.
 
 ## 1. Eine Million virtuelle Werte: Speicherform
 

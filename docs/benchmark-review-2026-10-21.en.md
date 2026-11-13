@@ -125,12 +125,13 @@ configuration; the other timing values are single runs.
 
 ## Verification
 
-The four CTest-registered benchmarks were freshly executed in the release
-profile and passed: `lhme_streaming_benchmark`,
+At the time of this historical capture, four CTest-registered benchmarks were
+freshly executed in the release profile and passed: `lhme_streaming_benchmark`,
 `lhme_table_memory_benchmark`, `lhme_kevin_cpu_benchmark`, and
 `lhme_hybrid_storage_benchmark` (4/4, 2.44 s). In addition, the hybrid test
 with `--full-overrides` and `lhme_controlled_stress` were executed directly;
-both passed.
+both passed. Current CMake additionally registers `lhme_fair_storage_benchmark`;
+this archived count is not a statement about current CI coverage.
 
 ## 1. One million virtual values: storage form
 

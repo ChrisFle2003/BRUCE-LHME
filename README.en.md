@@ -123,4 +123,7 @@ result strings and cancellation behaviour are specified in
 
 ## License
 
-BRUCE LHME is released under the [MIT License](LICENSE).
+BRUCE LHME is released under the
+[European Union Public Licence v. 1.2 or later (EUPL-1.2-or-later)](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the Developer Certificate of Origin
+used for new contributions.

@@ -1,5 +1,6 @@
 #include "demo_report.hpp"
 
+#include "benchmark_output.hpp"
 #include "kevin_sparse_table.hpp"
 #include "process_memory.hpp"
 #include "table_storage.hpp"
@@ -8,9 +9,11 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #if defined(__linux__)
 #include <cerrno>
@@ -289,33 +292,76 @@ struct BuiltTable {
 #endif
 }
 
-void display_measurement(bruce::lhme::demo::Report& report, TableKind kind,
-                         const IsolatedMeasurement& measurement) {
+[[nodiscard]] bool display_measurements(
+    bruce::lhme::demo::Report& report, TableKind kind,
+    const std::vector<IsolatedMeasurement>& measurements,
+    bruce::lhme::benchmark::output::RawCsvWriter* raw_output) {
   const auto name = kind_name(kind);
-  report.expect_true(std::string{name} + " measurement available",
-                     measurement.available);
-  report.expect_true(std::string{name} + " child report valid", measurement.success);
-  if (!measurement.success) return;
+  if (measurements.empty()) return false;
+  const auto& first = measurements.front();
+  report.expect_true(std::string{name} + " measurement available", first.available);
+  report.expect_true(std::string{name} + " child report valid", first.success);
+  if (!first.success) return false;
+
+  std::vector<double> build_samples;
+  std::vector<double> peak_samples;
+  build_samples.reserve(measurements.size());
+  peak_samples.reserve(measurements.size());
+  for (std::size_t index = 0U; index < measurements.size(); ++index) {
+    const auto& measurement = measurements[index];
+    report.expect_true(std::string{name} + " sample child report valid", measurement.success);
+    if (!measurement.success) return false;
+    report.expect_equal(std::string{name} + " sample record count",
+                        first.result.record_count, measurement.result.record_count);
+    report.expect_equal(std::string{name} + " sample container bytes",
+                        first.result.container_bytes, measurement.result.container_bytes);
+    build_samples.push_back(static_cast<double>(measurement.result.elapsed_milliseconds));
+    peak_samples.push_back(static_cast<double>(measurement.result.peak_bytes));
+    if (raw_output != nullptr &&
+        (!raw_output->write({.benchmark = "lhme_table_memory_benchmark",
+                             .case_id = name,
+                             .metric = "build_elapsed",
+                             .iteration = index + 1U,
+                             .unit = "ms/build",
+                             .value = build_samples.back(),
+                             .validation = "confirmed",
+                             .notes = "isolated Linux child; one million virtual addresses"}) ||
+         !raw_output->write({.benchmark = "lhme_table_memory_benchmark",
+                             .case_id = name,
+                             .metric = "peak_rss",
+                             .iteration = index + 1U,
+                             .unit = "bytes",
+                             .value = peak_samples.back(),
+                             .validation = "confirmed",
+                             .notes = "isolated Linux child high-water mark"}))) {
+      return false;
+    }
+  }
+
+  const auto build_summary = bruce::lhme::benchmark::output::format_summary(
+      build_samples, "ms/build");
+  const auto peak_summary = bruce::lhme::benchmark::output::format_summary(
+      peak_samples, "bytes");
+  if (!build_summary.has_value() || !peak_summary.has_value()) return false;
 
   report.row(std::string{name} + " records",
-             std::to_string(measurement.result.record_count));
+             std::to_string(first.result.record_count));
   report.row(std::string{name} + " value payload bytes",
-             std::to_string(measurement.result.value_payload_bytes));
+             std::to_string(first.result.value_payload_bytes));
   report.row(std::string{name} + " address/key metadata bytes",
-             std::to_string(measurement.result.address_metadata_bytes));
+             std::to_string(first.result.address_metadata_bytes));
   report.row(std::string{name} + " container bytes",
-             std::to_string(measurement.result.container_bytes));
+             std::to_string(first.result.container_bytes));
   report.row(std::string{name} + " explicit overrides",
-             std::to_string(measurement.result.override_count));
-  report.row(std::string{name} + " build milliseconds",
-             std::to_string(measurement.result.elapsed_milliseconds));
-  report.row(std::string{name} + " isolated process peak RAM bytes",
-             std::to_string(measurement.result.peak_bytes));
-  report.expect_true(std::string{name} + " positive peak",
-                     measurement.result.peak_bytes > 0);
+             std::to_string(first.result.override_count));
+  report.row(std::string{name} + " build statistics", *build_summary);
+  report.row(std::string{name} + " isolated process peak RAM statistics", *peak_summary);
+  report.expect_true(std::string{name} + " positive peak", first.result.peak_bytes > 0);
+  return true;
 }
 
-[[nodiscard]] int run_parent() {
+[[nodiscard]] int run_parent(std::size_t iterations,
+                              bruce::lhme::benchmark::output::RawCsvWriter* raw_output) {
   bruce::lhme::demo::Report report;
   report.heading("LHME Million-Value Table Memory Comparison");
   report.row("value model",
@@ -335,8 +381,14 @@ void display_measurement(bruce::lhme::demo::Report& report, TableKind kind,
                                             TableKind::FormulaWithOverridesFull};
   std::array<IsolatedMeasurement, kinds.size()> measurements{};
   for (std::size_t index = 0; index < kinds.size(); ++index) {
-    measurements[index] = run_isolated(kinds[index]);
-    display_measurement(report, kinds[index], measurements[index]);
+    std::vector<IsolatedMeasurement> samples;
+    samples.reserve(iterations);
+    for (std::size_t iteration = 0U; iteration < iterations; ++iteration) {
+      samples.push_back(run_isolated(kinds[index]));
+    }
+    if (!samples.empty()) measurements[index] = samples.front();
+    report.expect_true(std::string{kind_name(kinds[index])} + " repeated measurements valid",
+                       display_measurements(report, kinds[index], samples, raw_output));
   }
   if (measurements[0].success && measurements[1].success &&
       measurements[3].success) {
@@ -368,7 +420,23 @@ void display_measurement(bruce::lhme::demo::Report& report, TableKind kind,
   report.row("isolated process peak RAM", "unavailable (Linux only)");
 #endif
 
+  if (raw_output != nullptr) {
+    report.expect_true("table memory raw CSV write", raw_output->good());
+  }
+
   return report.finish();
+}
+
+[[nodiscard]] bool parse_positive(std::string_view text, std::size_t& value) {
+  try {
+    std::size_t consumed = 0U;
+    const auto parsed = std::stoull(std::string{text}, &consumed);
+    if (consumed != text.size() || parsed == 0U) return false;
+    value = static_cast<std::size_t>(parsed);
+    return true;
+  } catch (...) {
+    return false;
+  }
 }
 
 }  // namespace
@@ -383,6 +451,31 @@ int main(int argc, char* argv[]) {
     return 1;
 #endif
   }
-  if (argc != 1) return 1;
-  return run_parent();
+  std::size_t iterations = 3U;
+  std::optional<std::filesystem::path> raw_path;
+  for (int index = 1; index < argc; ++index) {
+    const std::string_view argument{argv[index]};
+    if (argument == "--quick") {
+      iterations = 1U;
+    } else if (argument == "--iterations" && index + 1 < argc) {
+      if (!parse_positive(argv[++index], iterations)) {
+        std::cerr << "--iterations requires a positive integer\n";
+        return 2;
+      }
+    } else if (argument == "--csv" && index + 1 < argc && !raw_path.has_value()) {
+      raw_path = std::filesystem::path{argv[++index]};
+    } else {
+      std::cerr << "usage: lhme_table_memory_benchmark [--quick] [--iterations N] [--csv FILE]\n";
+      return 2;
+    }
+  }
+  std::optional<bruce::lhme::benchmark::output::RawCsvWriter> raw_output;
+  if (raw_path.has_value()) {
+    raw_output.emplace(*raw_path);
+    if (!raw_output->good()) {
+      std::cerr << "--csv must name a new writable output file\n";
+      return 2;
+    }
+  }
+  return run_parent(iterations, raw_output ? &*raw_output : nullptr);
 }

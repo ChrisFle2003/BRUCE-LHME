@@ -109,7 +109,7 @@ Generated build products and local editor state are intentionally omitted.
 ├── CMakeLists.txt                 build, test, package, and option definitions
 ├── CMakePresets.json              Debug, Release, GCC/Ninja, sanitizer presets
 ├── README.en.md / README.md       project entry documentation
-├── LICENSE                        MIT license
+├── LICENSE                        EUPL-1.2-or-later licence text
 ├── cmake/                         installed-package configuration template
 ├── include/bruce/lhme/            public C++ and C headers
 ├── src/

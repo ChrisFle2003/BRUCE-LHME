@@ -239,10 +239,23 @@ if(BUILD_TESTING)
 add_test(NAME lhme_streaming_benchmark COMMAND lhme_streaming_benchmark)
 endif()
 
+add_executable(lhme_end_to_end_benchmark
+  demos/lhme/benchmarks/end_to_end_benchmark.cpp
+)
+target_include_directories(lhme_end_to_end_benchmark PRIVATE
+  include
+  demos/lhme/benchmarks/support
+)
+target_link_libraries(lhme_end_to_end_benchmark PRIVATE bruce_lhme_core)
+
 add_executable(lhme_controlled_stress
   demos/lhme/benchmarks/stress/controlled_stress.cpp
 )
-target_include_directories(lhme_controlled_stress PRIVATE include demos/lhme/support)
+target_include_directories(lhme_controlled_stress PRIVATE
+  include
+  demos/lhme/support
+  demos/lhme/benchmarks/support
+)
 target_link_libraries(lhme_controlled_stress PRIVATE bruce_lhme_core)
 endif()
 
@@ -293,6 +306,57 @@ target_include_directories(table_storage_tests PRIVATE
 target_link_libraries(table_storage_tests PRIVATE bruce_lhme_core)
 add_test(NAME table_storage_tests COMMAND table_storage_tests)
 
+add_executable(benchmark_statistics_tests
+  tests/support/test_main.cpp
+  tests/benchmark_statistics_tests.cpp
+)
+target_include_directories(benchmark_statistics_tests PRIVATE
+  tests/support
+  demos/lhme/benchmarks/support
+)
+target_link_libraries(benchmark_statistics_tests PRIVATE bruce_lhme_core)
+add_test(NAME benchmark_statistics_tests COMMAND benchmark_statistics_tests)
+
+add_executable(benchmark_output_tests
+  tests/support/test_main.cpp
+  tests/benchmark_output_tests.cpp
+)
+target_include_directories(benchmark_output_tests PRIVATE
+  tests/support
+  demos/lhme/benchmarks/support
+)
+add_test(NAME benchmark_output_tests COMMAND benchmark_output_tests)
+
+add_executable(canonical_benchmark_report_tests
+  tests/support/test_main.cpp
+  tests/canonical_benchmark_report_tests.cpp
+)
+target_include_directories(canonical_benchmark_report_tests PRIVATE tests/support)
+target_compile_definitions(canonical_benchmark_report_tests PRIVATE
+  CANONICAL_BENCHMARK_REPORT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/docs/benchmark-report-2026-11-11.en.md"
+  CANONICAL_BENCHMARK_RAW_PATH="${CMAKE_CURRENT_SOURCE_DIR}/docs/benchmark-raw-2026-11-11-v3.csv"
+)
+add_test(
+  NAME canonical_benchmark_report_tests
+  COMMAND ${CMAKE_COMMAND}
+    -DREPORT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/docs/benchmark-report-2026-11-11.en.md
+    -DRAW_FILE=${CMAKE_CURRENT_SOURCE_DIR}/docs/benchmark-raw-2026-11-11-v3.csv
+    -DVALIDATOR=$<TARGET_FILE:canonical_benchmark_report_tests>
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/canonical_benchmark_report_test.cmake
+)
+
+add_test(
+  NAME benchmark_capture_metadata_tests
+  COMMAND ${CMAKE_COMMAND}
+    -DTEST_OUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/benchmark-capture-metadata-tests
+    -DCAPTURE_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/cmake/benchmark_capture_metadata.cmake
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_capture_metadata_test.cmake
+)
+set_tests_properties(benchmark_capture_metadata_tests PROPERTIES
+  LABELS "benchmark;metadata;tooling"
+  RUN_SERIAL TRUE
+)
+
 add_executable(fair_benchmark_contract_tests
   tests/support/test_main.cpp
   tests/fair_benchmark_contract_tests.cpp
@@ -311,10 +375,14 @@ add_executable(lhme_fair_storage_benchmark
   demos/lhme/benchmarks/fair/fair_storage_benchmark.cpp
 )
 target_include_directories(lhme_fair_storage_benchmark PRIVATE
-  include demos/lhme/support demos/lhme/benchmarks/fair demos/lhme/benchmarks/stress
+  include
+  demos/lhme/support
+  demos/lhme/benchmarks/support
+  demos/lhme/benchmarks/fair
+  demos/lhme/benchmarks/stress
 )
 target_link_libraries(lhme_fair_storage_benchmark PRIVATE bruce_lhme_core)
-if(BUILD_TESTING)
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
 add_test(NAME lhme_fair_storage_benchmark COMMAND lhme_fair_storage_benchmark --quick)
 endif()
 endif()
@@ -433,12 +501,13 @@ add_executable(lhme_table_memory_benchmark
 target_include_directories(lhme_table_memory_benchmark PRIVATE
   include
   demos/lhme/support
+  demos/lhme/benchmarks/support
   demos/lhme/benchmarks/table_memory
   demos/lhme/benchmarks/stress
 )
 target_link_libraries(lhme_table_memory_benchmark PRIVATE bruce_lhme_core)
 if(BUILD_TESTING)
-add_test(NAME lhme_table_memory_benchmark COMMAND lhme_table_memory_benchmark)
+add_test(NAME lhme_table_memory_benchmark COMMAND lhme_table_memory_benchmark --quick)
 endif()
 
 add_executable(lhme_kevin_cpu_benchmark
@@ -447,11 +516,12 @@ add_executable(lhme_kevin_cpu_benchmark
 target_include_directories(lhme_kevin_cpu_benchmark PRIVATE
   include
   demos/lhme/support
+  demos/lhme/benchmarks/support
   demos/lhme/benchmarks/table_memory
 )
 target_link_libraries(lhme_kevin_cpu_benchmark PRIVATE bruce_lhme_core)
 if(BUILD_TESTING)
-add_test(NAME lhme_kevin_cpu_benchmark COMMAND lhme_kevin_cpu_benchmark)
+add_test(NAME lhme_kevin_cpu_benchmark COMMAND lhme_kevin_cpu_benchmark --quick)
 endif()
 
 add_executable(lhme_hybrid_storage_benchmark
@@ -460,11 +530,12 @@ add_executable(lhme_hybrid_storage_benchmark
 target_include_directories(lhme_hybrid_storage_benchmark PRIVATE
   include
   demos/lhme/support
+  demos/lhme/benchmarks/support
   demos/lhme/benchmarks/table_memory
 )
 target_link_libraries(lhme_hybrid_storage_benchmark PRIVATE bruce_lhme_core)
 if(BUILD_TESTING)
-add_test(NAME lhme_hybrid_storage_benchmark COMMAND lhme_hybrid_storage_benchmark)
+add_test(NAME lhme_hybrid_storage_benchmark COMMAND lhme_hybrid_storage_benchmark --quick)
 endif()
 endif()
 
@@ -473,6 +544,56 @@ add_executable(lhme_demo_report_tests demos/lhme/report_tests.cpp)
 target_include_directories(lhme_demo_report_tests PRIVATE include demos/lhme/support)
 target_link_libraries(lhme_demo_report_tests PRIVATE bruce_lhme_core)
 add_test(NAME lhme_demo_report_tests COMMAND lhme_demo_report_tests)
+
+add_executable(benchmark_csv_e2e_tests tests/benchmark_csv_e2e_tests.cpp)
+add_dependencies(benchmark_csv_e2e_tests
+  lhme_fair_storage_benchmark
+  lhme_table_memory_benchmark
+  lhme_kevin_cpu_benchmark
+  lhme_hybrid_storage_benchmark
+  lhme_controlled_stress
+)
+
+set(bruce_benchmark_csv_linux_supported 0)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(bruce_benchmark_csv_linux_supported 1)
+endif()
+add_test(
+  NAME benchmark_csv_quick_e2e_tests
+  COMMAND ${CMAKE_COMMAND}
+    -DTEST_OUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/benchmark-csv-quick-e2e
+    -DVALIDATOR=$<TARGET_FILE:benchmark_csv_e2e_tests>
+    -DFAIR_EXECUTABLE=$<TARGET_FILE:lhme_fair_storage_benchmark>
+    -DKEVIN_EXECUTABLE=$<TARGET_FILE:lhme_kevin_cpu_benchmark>
+    -DHYBRID_EXECUTABLE=$<TARGET_FILE:lhme_hybrid_storage_benchmark>
+    -DTABLE_EXECUTABLE=$<TARGET_FILE:lhme_table_memory_benchmark>
+    -DSTRESS_EXECUTABLE=$<TARGET_FILE:lhme_controlled_stress>
+    -DLINUX_SUPPORTED=${bruce_benchmark_csv_linux_supported}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_csv_quick_e2e_test.cmake
+)
+set_tests_properties(benchmark_csv_quick_e2e_tests PROPERTIES
+  LABELS "benchmark;csv;e2e"
+  RUN_SERIAL TRUE
+)
+add_test(
+  NAME benchmark_csv_forced_non_linux_skip_tests
+  COMMAND ${CMAKE_COMMAND}
+    -DTEST_OUTPUT_ROOT=${CMAKE_CURRENT_BINARY_DIR}/benchmark-csv-forced-non-linux-skip
+    -DVALIDATOR=$<TARGET_FILE:benchmark_csv_e2e_tests>
+    -DFAIR_EXECUTABLE=$<TARGET_FILE:lhme_fair_storage_benchmark>
+    -DKEVIN_EXECUTABLE=$<TARGET_FILE:lhme_kevin_cpu_benchmark>
+    -DHYBRID_EXECUTABLE=$<TARGET_FILE:lhme_hybrid_storage_benchmark>
+    -DTABLE_EXECUTABLE=$<TARGET_FILE:lhme_table_memory_benchmark>
+    -DSTRESS_EXECUTABLE=$<TARGET_FILE:lhme_controlled_stress>
+    -DLINUX_SUPPORTED=0
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_csv_quick_e2e_test.cmake
+)
+set_tests_properties(benchmark_csv_forced_non_linux_skip_tests PROPERTIES
+  LABELS "benchmark;csv;e2e;platform-skip"
+  PASS_REGULAR_EXPRESSION
+    "SKIP fair/table/stress benchmark CSV end-to-end paths: isolated process/RSS measurement is Linux-only"
+  RUN_SERIAL TRUE
+)
 endif()
 
 include(CMakePackageConfigHelpers)
@@ -508,6 +629,11 @@ install(FILES
 )
 
 if(BUILD_TESTING)
+  add_test(
+    NAME license_policy_tests
+    COMMAND ${CMAKE_COMMAND}
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/license_policy_test.cmake")
+
   add_test(
     NAME cmake_presets_contract
     COMMAND ${CMAKE_COMMAND}

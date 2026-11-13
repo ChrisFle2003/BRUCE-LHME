@@ -100,8 +100,12 @@ materialized `UInt64` values with a symbolic formula recipe.
 `lhme_kevin_cpu_benchmark` separately measures the KEVIN filter pipeline for
 64 tiles (4,096 virtual cells) with 1, 2, 4, and 8 CPU workers. It verifies the
 same survivors and zero Exact materializations for each worker count and
-averages four runs per persistent worker pool. Timings depend on the machine;
-the deterministic equality of candidates and counters is the fixed contract.
+uses transient, bounded `std::async` batches; it does not instantiate
+`KevinTileCpuExecutor`. It performs one unscored warm-up and 11 independent
+timed reductions per worker count by default (three in `--quick` mode), and
+can write machine-readable samples with `--csv FILE`. Timings depend on the
+machine; deterministic equality of candidates and counters is the fixed
+contract.
 
 `lhme_hybrid_storage_benchmark` extends the comparison to a virtual address
 space of one million values. It stores the formula base once and adds only real
