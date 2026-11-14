@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, main-v5]
   pull_request:
-    branches: [main]
+    branches: [main, main-v5]
 
 permissions:
   contents: read
@@ -20,8 +20,21 @@ jobs:
         preset: [debug, release]
     steps:
       - uses: actions/checkout@v4
-      - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+      - name: Install Boost headers (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes libboost-dev
+      - name: Install Boost headers (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install boost --triplet x64-windows
+          Add-Content -Path $env:GITHUB_ENV -Value "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+      - name: Configure tests and demos
+        run: cmake --preset ${{ matrix.preset }} -DBRUCE_BUILD_EXAMPLES=ON
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
@@ -36,9 +49,141 @@ jobs:
         preset: [address, undefined]
     steps:
       - uses: actions/checkout@v4
+      - name: Install Boost headers (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes libboost-dev
+      - name: Install Boost headers (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install boost --triplet x64-windows
+          Add-Content -Path $env:GITHUB_ENV -Value "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
+
+  lhme-flagship-sanitizers:
+    name: ubuntu-latest / LHME flagship sanitizers
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Boost headers (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes libboost-dev
+      - name: Install Boost headers (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install boost --triplet x64-windows
+          Add-Content -Path $env:GITHUB_ENV -Value "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+      - name: Configure AddressSanitizer build
+        run: |
+          set -euo pipefail
+          cmake -S "$GITHUB_WORKSPACE" -B "$RUNNER_TEMP/lhme-flagship-asan" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DBRUCE_BUILD_EXAMPLES=ON \
+            -DBRUCE_SANITIZER=address
+      - name: Build AddressSanitizer flagship targets
+        run: |
+          set -euo pipefail
+          cmake --build "$RUNNER_TEMP/lhme-flagship-asan" --parallel 2 --target \
+            lhme_flagship_demo \
+            lhme_virtual_tariff_demo \
+            formula_override_store_tests \
+            formula_override_streaming_tests \
+            formula_override_snapshot_tests \
+            streaming_tests
+      - name: Test flagship targets with AddressSanitizer
+        run: |
+          set -uo pipefail
+          build_dir="$RUNNER_TEMP/lhme-flagship-asan"
+          test_regex='^(lhme_flagship_demo|lhme_virtual_tariff_demo|formula_override_store_tests|formula_override_streaming_tests|formula_override_snapshot_tests|streaming_tests)$'
+          log_file="$RUNNER_TEMP/lhme-flagship-asan.log"
+
+          set +e
+          ASAN_OPTIONS="detect_leaks=1:halt_on_error=1:abort_on_error=1" \
+            ctest --test-dir "$build_dir" --output-on-failure --no-tests=error -R "$test_regex" \
+            2>&1 | tee "$log_file"
+          ctest_status="${PIPESTATUS[0]}"
+          set -e
+
+          if [ "$ctest_status" -eq 0 ]; then
+            exit 0
+          fi
+
+          if ! grep -Fq "LeakSanitizer does not work under ptrace" "$log_file"; then
+            exit "$ctest_status"
+          fi
+
+          if grep -Eq "ERROR: AddressSanitizer|SUMMARY: AddressSanitizer|AddressSanitizer:DEADLYSIGNAL" "$log_file"; then
+            exit "$ctest_status"
+          fi
+
+          echo "::warning title=LeakSanitizer unavailable::The runner blocks LeakSanitizer under ptrace. Re-running the same selected tests with leak detection disabled; AddressSanitizer failures remain fatal."
+          {
+            echo "### LeakSanitizer unavailable"
+            echo
+            echo "The runner reports that LeakSanitizer cannot run under ptrace. The selected tests are re-run with only leak detection disabled; AddressSanitizer diagnostics remain fatal."
+          } >> "$GITHUB_STEP_SUMMARY"
+          ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:abort_on_error=1" \
+            ctest --test-dir "$build_dir" --output-on-failure --no-tests=error -R "$test_regex"
+      - name: Probe ThreadSanitizer support
+        id: tsan-probe
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          probe_source="$RUNNER_TEMP/lhme-tsan-probe.cpp"
+          probe_binary="$RUNNER_TEMP/lhme-tsan-probe"
+          printf '%s\n' 'int main() { return 0; }' > "$probe_source"
+          "${CXX:-g++}" -std=c++20 -fsanitize=thread -fno-omit-frame-pointer \
+            "$probe_source" -o "$probe_binary"
+          "$probe_binary"
+      - name: Report unavailable ThreadSanitizer
+        if: steps.tsan-probe.outcome != 'success'
+        run: |
+          echo "::notice title=ThreadSanitizer unavailable::The Ubuntu runner cannot compile or execute a ThreadSanitizer probe; the ThreadSanitizer target run is skipped."
+          {
+            echo "### ThreadSanitizer unavailable"
+            echo
+            echo "The runner failed the compile-and-run probe, so the ThreadSanitizer target run was skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Configure ThreadSanitizer build
+        if: steps.tsan-probe.outcome == 'success'
+        run: |
+          set -euo pipefail
+          cmake -S "$GITHUB_WORKSPACE" -B "$RUNNER_TEMP/lhme-flagship-tsan" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DBRUCE_BUILD_EXAMPLES=ON \
+            -DBRUCE_SANITIZER=thread
+      - name: Build ThreadSanitizer override and streaming tests
+        if: steps.tsan-probe.outcome == 'success'
+        run: |
+          set -euo pipefail
+          cmake --build "$RUNNER_TEMP/lhme-flagship-tsan" --parallel 2 --target \
+            formula_override_store_tests \
+            formula_override_streaming_tests \
+            formula_override_snapshot_tests \
+            streaming_tests
+      - name: Test override and streaming paths with ThreadSanitizer
+        if: steps.tsan-probe.outcome == 'success'
+        run: |
+          set -euo pipefail
+          TSAN_OPTIONS="halt_on_error=1:abort_on_error=1" \
+            ctest --test-dir "$RUNNER_TEMP/lhme-flagship-tsan" --output-on-failure --no-tests=error \
+            -R '^(formula_override_store_tests|formula_override_streaming_tests|formula_override_snapshot_tests|streaming_tests)$'
