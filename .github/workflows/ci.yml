@@ -20,6 +20,19 @@ jobs:
         preset: [debug, release]
     steps:
       - uses: actions/checkout@v4
+      - name: Install Boost headers (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes libboost-dev
+      - name: Install Boost headers (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install boost --triplet x64-windows
+          Add-Content -Path $env:GITHUB_ENV -Value "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
       - name: Configure tests and demos
         run: cmake --preset ${{ matrix.preset }} -DBRUCE_BUILD_EXAMPLES=ON
       - name: Build
@@ -36,6 +49,19 @@ jobs:
         preset: [address, undefined]
     steps:
       - uses: actions/checkout@v4
+      - name: Install Boost headers (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes libboost-dev
+      - name: Install Boost headers (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install boost --triplet x64-windows
+          Add-Content -Path $env:GITHUB_ENV -Value "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
       - name: Build
@@ -51,6 +77,19 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+      - name: Install Boost headers (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes libboost-dev
+      - name: Install Boost headers (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install boost --triplet x64-windows
+          Add-Content -Path $env:GITHUB_ENV -Value "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
       - name: Configure AddressSanitizer build
         run: |
           set -euo pipefail
