@@ -527,7 +527,7 @@ Important behaviour:
   submitted one at a time to avoid worker-order effects on retention.
 - Cancellation clears retained candidates.
 - Candidate memory accounting is an internal estimate, not a general process
-  memory measurement.
+  memory measurement or a hard process-memory limit.
 - Core evaluation is used directly; the engine cache is not used here.
 
 ## 11. Override Storage and Snapshots
@@ -554,6 +554,37 @@ Override calculation still respects caller-facing mode and relevant limits:
 For a technique binding, the effective budget is the stricter value of caller
 and binding default budgets. A computed formula path calls `Engine::evaluate`;
 a computed technique path calls `Engine::evaluate_technique`.
+
+Store-bound streaming rejects a structurally valid Formula or Technique binding
+unless the corresponding Formula or Technique has already been registered with
+the Store's `Engine`. The rejection happens before worker creation and before
+the range is traversed.
+
+### Capacity configuration
+
+`FormulaOverrideStoreConfig` makes override capacity explicit:
+
+```cpp
+FormulaOverrideStore store{
+    engine,
+    {.max_override_count = 10'000,
+     .max_override_storage_bytes = 4U * 1024U * 1024U,
+     .max_override_value_bytes = 64U * 1024U}};
+```
+
+All three limits default to unlimited for source compatibility. The Store uses
+deterministic payload accounting: the canonical stored override key plus the
+BigInt magnitude in bytes, with zero charged as one value byte. This is a
+capacity contract for stored overrides, not a claim about allocator or process
+memory.
+
+There is no eviction. A new record, or a replacement that would exceed a
+configured count, total-payload, or per-value limit, returns `BudgetExceeded`
+and leaves the existing record unchanged. Removing a record releases its
+charged payload. `replace_snapshot(...)` and
+`load_formula_override_snapshot(...)` return `CapacityExceeded` when a valid
+snapshot does not fit, and leave the current Store untouched. All capacity
+checks and mutations are performed under the Store's exclusive lock.
 
 ### Thread safety
 

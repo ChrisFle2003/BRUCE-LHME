@@ -38,6 +38,7 @@ class Engine {
   // identical registration succeeds; a conflicting registration is rejected.
   [[nodiscard]] bool register_exact_formula_cache_binding(
       ExactFormulaTechniqueCacheBinding binding);
+  [[nodiscard]] bool has_formula(const FormulaSpec& spec) const;
   [[nodiscard]] bool has_technique(const TechniqueIdentity& identity) const;
   [[nodiscard]] EvaluationResult evaluate(const EvaluationRequest& request);
   [[nodiscard]] EvaluationResult evaluate_technique(

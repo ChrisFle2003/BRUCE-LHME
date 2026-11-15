@@ -322,9 +322,7 @@ FormulaOverrideSnapshotStatus load_formula_override_snapshot(
   if (input.peek() != std::char_traits<char>::eof()) {
     return FormulaOverrideSnapshotStatus::InvalidSnapshot;
   }
-  return store.replace_snapshot(snapshot) == FormulaOverrideSnapshotStatus::Confirmed
-             ? FormulaOverrideSnapshotStatus::Confirmed
-             : FormulaOverrideSnapshotStatus::InvalidSnapshot;
+  return store.replace_snapshot(snapshot);
 }
 
 }  // namespace bruce::lhme

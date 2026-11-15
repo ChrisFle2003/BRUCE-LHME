@@ -31,6 +31,26 @@ std::uint64_t bytes_for_bits(std::uint64_t bits) {
   return bits / 8U + (bits % 8U == 0 ? 0U : 1U);
 }
 
+std::uint64_t override_value_storage_bytes(const BigInt& value) {
+  return std::max(std::uint64_t{1}, bytes_for_bits(bit_length(value)));
+}
+
+std::uint64_t override_storage_bytes(const std::string& key,
+                                     const BigInt& value) {
+  const auto key_bytes = static_cast<std::uint64_t>(key.size());
+  const auto value_bytes = override_value_storage_bytes(value);
+  return key_bytes > std::numeric_limits<std::uint64_t>::max() - value_bytes
+             ? std::numeric_limits<std::uint64_t>::max()
+             : key_bytes + value_bytes;
+}
+
+bool exceeds_storage_limit(std::uint64_t retained_bytes,
+                           std::uint64_t replacement_bytes,
+                           std::uint64_t maximum_bytes) {
+  return replacement_bytes > maximum_bytes ||
+         retained_bytes > maximum_bytes - replacement_bytes;
+}
+
 Budget stricter_budget(Budget first, const Budget& second) {
   first.max_bit_length = std::min(first.max_bit_length, second.max_bit_length);
   first.max_operations = std::min(first.max_operations, second.max_operations);
@@ -55,6 +75,22 @@ EvaluationResult invalid_result(EvaluationMode mode, const char* reason) {
 EvaluationResult within_trace_budget(EvaluationResult result,
                                      const Budget& budget) {
   enforce_trace_budget(result, budget.max_trace_bytes);
+  return result;
+}
+
+bool cancellation_requested(const FormulaOverrideRequest& request) {
+  return request.cancellation_requested ||
+         (request.cancellation_signal != nullptr &&
+          request.cancellation_signal->load());
+}
+
+EvaluationResult cancelled_result(EvaluationMode mode) {
+  EvaluationResult result;
+  result.status = Status::Cancelled;
+  result.mode = mode;
+  result.trace = make_trace({{.scope = GateScope::Run,
+                              .status = result.status,
+                              .reason = "formula override request cancellation requested"}});
   return result;
 }
 
@@ -129,16 +165,54 @@ std::string canonical_formula_binding_identity(const FormulaBinding& binding) {
       binding);
 }
 
-FormulaOverrideStore::FormulaOverrideStore(Engine& engine)
-    : engine_(engine), mutex_(std::make_shared<std::shared_mutex>()) {}
+FormulaOverrideStore::FormulaOverrideStore(Engine& engine,
+                                           FormulaOverrideStoreConfig config)
+    : engine_(engine),
+      config_(config),
+      mutex_(std::make_shared<std::shared_mutex>()) {}
+
+bool FormulaOverrideStore::has_registered_binding(
+    const FormulaBinding& binding) const {
+  return std::visit(
+      [this](const auto& value) {
+        using Binding = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Binding, FormulaSpec>) {
+          return engine_.has_formula(value);
+        } else {
+          return engine_.has_technique(value.identity);
+        }
+      },
+      binding);
+}
 
 Status FormulaOverrideStore::set_override(const FormulaBinding& binding,
                                           FormulaAddress address, BigInt value) {
   if (!valid_formula_binding(binding)) return Status::InvalidArgument;
+  const auto key = override_key(binding, address);
+  const auto value_bytes = override_value_storage_bytes(value);
+  if (value_bytes > config_.max_override_value_bytes) {
+    return Status::BudgetExceeded;
+  }
+  const auto replacement_bytes = override_storage_bytes(key, value);
   const std::unique_lock lock(*mutex_);
-  overrides_.insert_or_assign(override_key(binding, address),
-                              FormulaOverrideRecord{binding, address,
-                                                    std::move(value)});
+  const auto found = overrides_.find(key);
+  const auto previous_bytes = found == overrides_.end()
+                                  ? std::uint64_t{0}
+                                  : override_storage_bytes(found->first,
+                                                           found->second.value);
+  const auto retained_bytes = override_storage_bytes_ - previous_bytes;
+  if ((found == overrides_.end() &&
+       overrides_.size() >= config_.max_override_count) ||
+      exceeds_storage_limit(retained_bytes, replacement_bytes,
+                            config_.max_override_storage_bytes)) {
+    return Status::BudgetExceeded;
+  }
+  if (found == overrides_.end()) {
+    overrides_.emplace(key, FormulaOverrideRecord{binding, address, std::move(value)});
+  } else {
+    found->second = FormulaOverrideRecord{binding, address, std::move(value)};
+  }
+  override_storage_bytes_ = retained_bytes + replacement_bytes;
   return Status::Confirmed;
 }
 
@@ -146,10 +220,20 @@ bool FormulaOverrideStore::remove_override(const FormulaBinding& binding,
                                            FormulaAddress address) {
   if (!valid_formula_binding(binding)) return false;
   const std::unique_lock lock(*mutex_);
-  return overrides_.erase(override_key(binding, address)) != 0;
+  const auto found = overrides_.find(override_key(binding, address));
+  if (found == overrides_.end()) return false;
+  const auto bytes = override_storage_bytes(found->first, found->second.value);
+  override_storage_bytes_ = bytes > override_storage_bytes_
+                                ? 0
+                                : override_storage_bytes_ - bytes;
+  overrides_.erase(found);
+  return true;
 }
 
 FormulaValue FormulaOverrideStore::evaluate(const FormulaOverrideRequest& request) {
+  if (cancellation_requested(request)) {
+    return {.result = within_trace_budget(cancelled_result(request.mode), request.budget)};
+  }
   if (!valid_formula_binding(request.binding)) {
     return {.result = within_trace_budget(
                 invalid_result(request.mode, "formula binding is invalid"),
@@ -161,6 +245,9 @@ FormulaValue FormulaOverrideStore::evaluate(const FormulaOverrideRequest& reques
     const std::shared_lock lock(*mutex_);
     const auto found = overrides_.find(override_key(request.binding, request.address));
     if (found != overrides_.end()) override_value = found->second.value;
+  }
+  if (cancellation_requested(request)) {
+    return {.result = within_trace_budget(cancelled_result(request.mode), request.budget)};
   }
   if (override_value.has_value()) {
     Budget effective_budget = request.budget;
@@ -177,7 +264,7 @@ FormulaValue FormulaOverrideStore::evaluate(const FormulaOverrideRequest& reques
   if (request.mode == EvaluationMode::Exact) {
     computed_exact_evaluation_count_.fetch_add(1, std::memory_order_relaxed);
   }
-  return std::visit(
+  auto computed = std::visit(
       [this, &request](const auto& binding) -> FormulaValue {
         using Binding = std::decay_t<decltype(binding)>;
         if constexpr (std::is_same_v<Binding, FormulaSpec>) {
@@ -185,7 +272,11 @@ FormulaValue FormulaOverrideStore::evaluate(const FormulaOverrideRequest& reques
                                               .address = request.address,
                                               .mode = request.mode,
                                               .budget = request.budget,
-                                              .modulus = request.modulus}),
+                                              .modulus = request.modulus,
+                                              .cancellation_requested =
+                                                  request.cancellation_requested,
+                                              .cancellation_signal =
+                                                  request.cancellation_signal}),
                   .source = FormulaValueSource::Computed};
         } else {
           return {.result = engine_.evaluate_technique(
@@ -195,11 +286,21 @@ FormulaValue FormulaOverrideStore::evaluate(const FormulaOverrideRequest& reques
                        .mode = request.mode,
                        .budget = stricter_budget(request.budget,
                                                  binding.default_budget),
-                       .modulus = request.modulus}),
+                       .modulus = request.modulus,
+                       .cancellation_signal = request.cancellation_signal}),
                   .source = FormulaValueSource::Computed};
         }
       },
       request.binding);
+  // Engine owns the active Formula or Technique evaluation. Observe the
+  // Store request again only at its result-publication boundary; this does
+  // not preempt work already running inside Engine.
+  if (cancellation_requested(request)) {
+    return {.result = within_trace_budget(cancelled_result(request.mode),
+                                          request.budget),
+            .source = FormulaValueSource::Computed};
+  }
+  return computed;
 }
 
 FormulaOverrideSnapshot FormulaOverrideStore::snapshot() const {
@@ -213,26 +314,40 @@ FormulaOverrideSnapshot FormulaOverrideStore::snapshot() const {
 FormulaOverrideSnapshotStatus FormulaOverrideStore::replace_snapshot(
     const FormulaOverrideSnapshot& snapshot) {
   std::map<std::string, FormulaOverrideRecord> replacements;
+  std::uint64_t replacement_bytes = 0;
   for (const auto& record : snapshot.overrides) {
     if (!valid_formula_binding(record.binding)) {
       return FormulaOverrideSnapshotStatus::InvalidSnapshot;
     }
     const auto key = override_key(record.binding, record.address);
     if (replacements.contains(key)) return FormulaOverrideSnapshotStatus::InvalidSnapshot;
+    const auto value_bytes = override_value_storage_bytes(record.value);
+    const auto record_bytes = override_storage_bytes(key, record.value);
+    if (value_bytes > config_.max_override_value_bytes ||
+        replacements.size() >= config_.max_override_count ||
+        exceeds_storage_limit(replacement_bytes, record_bytes,
+                              config_.max_override_storage_bytes)) {
+      return FormulaOverrideSnapshotStatus::CapacityExceeded;
+    }
+    replacement_bytes += record_bytes;
     replacements.emplace(key, record);
   }
   const std::unique_lock lock(*mutex_);
   overrides_ = std::move(replacements);
+  override_storage_bytes_ = replacement_bytes;
   return FormulaOverrideSnapshotStatus::Confirmed;
 }
 
 FormulaOverrideStoreStatistics FormulaOverrideStore::inspect() const {
   std::size_t override_count = 0;
+  std::uint64_t override_storage_bytes = 0;
   {
     const std::shared_lock lock(*mutex_);
     override_count = overrides_.size();
+    override_storage_bytes = override_storage_bytes_;
   }
   return {.override_count = override_count,
+          .override_storage_bytes = override_storage_bytes,
           .computed_exact_evaluation_count =
               computed_exact_evaluation_count_.load(std::memory_order_relaxed),
           .engine_cache = engine_.inspect()};

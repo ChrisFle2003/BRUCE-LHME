@@ -1,9 +1,12 @@
 #include "test.hpp"
 
 #include "bruce/lhme/streaming.hpp"
+#include "bruce/lhme/trace.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace {
@@ -27,6 +30,18 @@ std::vector<bruce::lhme::BigInt> exact_values(
   std::vector<bruce::lhme::BigInt> values;
   for (const auto& result : results) values.push_back(result.exact_integer());
   return values;
+}
+
+std::uint64_t legacy_retained_result_size(
+    const bruce::lhme::EvaluationResult& result) {
+  std::uint64_t bytes = sizeof(bruce::lhme::EvaluationResult);
+  if (result.integer.has_value()) {
+    bytes += result.integer->convert_to<std::string>().size();
+  }
+  if (result.trace != nullptr) {
+    for (const auto& event : result.trace->events) bytes += event.reason.size();
+  }
+  return bytes;
 }
 
 }  // namespace
@@ -161,4 +176,23 @@ TEST(oversized_candidate_is_summarized_but_not_retained) {
   CHECK(result.status == bruce::lhme::Status::Confirmed);
   CHECK(result.summary.confirmed_count == 1);
   CHECK(result.retained_candidates.empty());
+}
+
+TEST(streaming_legacy_retention_budget_excludes_store_candidate_metadata) {
+  auto expected_request = exact_request();
+  expected_request.address = {.index = 0};
+  const auto expected = bruce::lhme::evaluate(expected_request);
+  CHECK(expected.status == bruce::lhme::Status::Confirmed);
+
+  auto options = retained_options();
+  options.tile_size = 1;
+  options.max_retained_candidates = 1;
+  options.retention_memory_bytes = legacy_retained_result_size(expected);
+  const auto result = bruce::lhme::evaluate_streaming_range(
+      exact_request(), {0, 0}, options);
+
+  CHECK(result.status == bruce::lhme::Status::Confirmed);
+  CHECK(result.summary.confirmed_count == 1);
+  CHECK(result.retained_candidates.size() == 1);
+  CHECK(result.retained_candidates.front().exact_integer() == 0);
 }

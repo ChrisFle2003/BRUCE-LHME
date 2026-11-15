@@ -370,6 +370,10 @@ bool Engine::register_exact_formula_cache_binding(
   }
 }
 
+bool Engine::has_formula(const FormulaSpec& spec) const {
+  return is_registered(spec);
+}
+
 bool Engine::has_technique(const TechniqueIdentity& identity) const {
   const std::shared_lock lock(*registry_mutex_);
   return valid_technique_identity(identity) &&

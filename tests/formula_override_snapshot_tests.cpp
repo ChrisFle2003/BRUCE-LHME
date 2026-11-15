@@ -16,6 +16,49 @@
 #include <sys/resource.h>
 #endif
 
+TEST(formula_override_snapshot_round_trips_sparse_flagship_overrides) {
+  using namespace bruce::lhme;
+  const auto path = std::filesystem::temp_directory_path() /
+                    "bruce-formula-override-flagship-round-trip.bin";
+  std::filesystem::remove(path);
+
+  auto source_engine = Engine::create({});
+  const auto source_binding =
+      source_engine.register_formula(make_power_offset_spec(2, 100, 1));
+  FormulaOverrideStore source{source_engine};
+  CHECK(source.set_override(source_binding, {.index = 10}, BigInt{-40}) ==
+        Status::Confirmed);
+  CHECK(source.set_override(source_binding, {.index = 777}, BigInt{17}) ==
+        Status::Confirmed);
+  CHECK(source.set_override(source_binding, {.index = 999}, BigInt{0}) ==
+        Status::Confirmed);
+  CHECK(save_formula_override_snapshot(source, path) ==
+        FormulaOverrideSnapshotStatus::Confirmed);
+
+  auto restored_engine = Engine::create({});
+  const auto restored_binding =
+      restored_engine.register_formula(make_power_offset_spec(2, 100, 1));
+  FormulaOverrideStore restored{restored_engine};
+  CHECK(load_formula_override_snapshot(restored, path) ==
+        FormulaOverrideSnapshotStatus::Confirmed);
+
+  const auto overridden = restored.evaluate({.binding = restored_binding,
+                                             .address = {.index = 10},
+                                             .mode = EvaluationMode::Exact,
+                                             .budget = Budget::unlimited()});
+  const auto computed = restored.evaluate({.binding = restored_binding,
+                                           .address = {.index = 11},
+                                           .mode = EvaluationMode::Exact,
+                                           .budget = Budget::unlimited()});
+  std::filesystem::remove(path);
+
+  CHECK(restored.inspect().override_count == 3);
+  CHECK(overridden.source == FormulaValueSource::Override);
+  CHECK(overridden.result.exact_integer() == -40);
+  CHECK(computed.source == FormulaValueSource::Computed);
+  CHECK(computed.result.status == Status::Confirmed);
+}
+
 namespace {
 
 constexpr std::uint64_t kMaximumSnapshotBytes = 16U * 1024U * 1024U;
@@ -151,6 +194,40 @@ TEST(formula_override_snapshot_round_trips_a_technique_binding) {
                                         .budget = Budget::unlimited()});
   CHECK(value.source == FormulaValueSource::Override);
   CHECK(value.result.exact_integer() == 13);
+  std::filesystem::remove(path);
+}
+
+TEST(formula_override_snapshot_rejects_a_reload_that_exceeds_store_capacity) {
+  using namespace bruce::lhme;
+  const auto path = std::filesystem::temp_directory_path() /
+                    "bruce-formula-override-capacity-test.bin";
+  std::filesystem::remove(path);
+
+  auto source_engine = Engine::create({});
+  const auto binding =
+      source_engine.register_formula(make_power_offset_spec(2, 100, 1));
+  FormulaOverrideStore source{source_engine};
+  CHECK(source.set_override(binding, {.index = 2}, BigInt{17}) == Status::Confirmed);
+  CHECK(source.set_override(binding, {.index = 3}, BigInt{19}) == Status::Confirmed);
+  CHECK(save_formula_override_snapshot(source, path) ==
+        FormulaOverrideSnapshotStatus::Confirmed);
+
+  auto target_engine = Engine::create({});
+  const auto target_binding =
+      target_engine.register_formula(make_power_offset_spec(2, 100, 1));
+  FormulaOverrideStore target{
+      target_engine, {.max_override_count = 1}};
+  CHECK(target.set_override(target_binding, {.index = 4}, BigInt{23}) ==
+        Status::Confirmed);
+
+  CHECK(load_formula_override_snapshot(target, path) ==
+        FormulaOverrideSnapshotStatus::CapacityExceeded);
+  CHECK(target.inspect().override_count == 1);
+  CHECK(target.evaluate({.binding = target_binding,
+                         .address = {.index = 4},
+                         .mode = EvaluationMode::Exact,
+                         .budget = Budget::unlimited()})
+            .result.exact_integer() == 23);
   std::filesystem::remove(path);
 }
 

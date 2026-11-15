@@ -2,6 +2,7 @@
 
 #include "bruce/lhme/formula_override_store.hpp"
 
+#include <array>
 #include <atomic>
 #include <future>
 #include <thread>
@@ -69,6 +70,90 @@ TEST(formula_override_store_rejects_formula_specs_outside_the_v0_1_contract) {
         Status::InvalidArgument);
   CHECK(store.evaluate(request_for(unsupported, 2)).result.status ==
         Status::InvalidArgument);
+}
+
+TEST(formula_override_store_rejects_new_records_at_the_count_limit) {
+  auto engine = Engine::create({});
+  const auto binding = power_binding(engine);
+  FormulaOverrideStore store{
+      engine, {.max_override_count = 1}};
+
+  CHECK(store.set_override(binding, {.index = 2}, BigInt{17}) ==
+        Status::Confirmed);
+  CHECK(store.set_override(binding, {.index = 3}, BigInt{19}) ==
+        Status::BudgetExceeded);
+  CHECK(store.inspect().override_count == 1);
+  CHECK(store.evaluate(request_for(binding, 2)).result.exact_integer() == 17);
+  CHECK(store.evaluate(request_for(binding, 3)).source == FormulaValueSource::Computed);
+
+  CHECK(store.set_override(binding, {.index = 2}, BigInt{23}) ==
+        Status::Confirmed);
+  CHECK(store.evaluate(request_for(binding, 2)).result.exact_integer() == 23);
+  CHECK(store.remove_override(binding, {.index = 2}));
+  CHECK(store.set_override(binding, {.index = 3}, BigInt{19}) ==
+        Status::Confirmed);
+}
+
+TEST(formula_override_store_enforces_value_and_storage_limits_without_replacing) {
+  auto engine = Engine::create({});
+  const auto binding = power_binding(engine);
+  FormulaOverrideStore value_limited{
+      engine, {.max_override_value_bytes = 1}};
+
+  CHECK(value_limited.set_override(binding, {.index = 2}, BigInt{255}) ==
+        Status::Confirmed);
+  CHECK(value_limited.set_override(binding, {.index = 2}, BigInt{256}) ==
+        Status::BudgetExceeded);
+  CHECK(value_limited.evaluate(request_for(binding, 2)).result.exact_integer() == 255);
+
+  FormulaOverrideStore baseline{engine};
+  CHECK(baseline.set_override(binding, {.index = 4}, BigInt{255}) ==
+        Status::Confirmed);
+  const auto record_bytes = baseline.inspect().override_storage_bytes;
+  CHECK(record_bytes > 0);
+
+  FormulaOverrideStore storage_limited{
+      engine, {.max_override_count = 2,
+               .max_override_storage_bytes = record_bytes}};
+  CHECK(storage_limited.set_override(binding, {.index = 4}, BigInt{255}) ==
+        Status::Confirmed);
+  CHECK(storage_limited.inspect().override_storage_bytes == record_bytes);
+  CHECK(storage_limited.set_override(binding, {.index = 5}, BigInt{255}) ==
+        Status::BudgetExceeded);
+  CHECK(storage_limited.inspect().override_count == 1);
+  CHECK(storage_limited.evaluate(request_for(binding, 4)).result.exact_integer() ==
+        255);
+}
+
+TEST(formula_override_store_capacity_remains_safe_during_parallel_updates) {
+  auto engine = Engine::create({});
+  const auto binding = power_binding(engine);
+  FormulaOverrideStore store{
+      engine, {.max_override_count = 1}};
+  std::atomic_bool start = false;
+  std::array<Status, 2> statuses{Status::InternalError, Status::InternalError};
+
+  std::thread first([&] {
+    start.wait(false);
+    statuses[0] = store.set_override(binding, {.index = 2}, BigInt{17});
+  });
+  std::thread second([&] {
+    start.wait(false);
+    statuses[1] = store.set_override(binding, {.index = 3}, BigInt{19});
+  });
+  start.store(true);
+  start.notify_all();
+  first.join();
+  second.join();
+
+  const auto confirmed = static_cast<std::size_t>(statuses[0] == Status::Confirmed) +
+                         static_cast<std::size_t>(statuses[1] == Status::Confirmed);
+  const auto exhausted =
+      static_cast<std::size_t>(statuses[0] == Status::BudgetExceeded) +
+      static_cast<std::size_t>(statuses[1] == Status::BudgetExceeded);
+  CHECK(confirmed == 1);
+  CHECK(exhausted == 1);
+  CHECK(store.inspect().override_count == 1);
 }
 
 TEST(formula_override_store_parallel_exact_reads_are_deterministic) {

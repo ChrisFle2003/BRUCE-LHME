@@ -29,7 +29,7 @@ sparse.
 
 - CPU and RAM execution only
 - exact `BigInt`, modular, metric and symbolic formula evaluation
-- bounded result cache and sparse formula overrides
+- bounded result cache and capacity-configured sparse formula overrides
 - deterministic traces, resource budgets and safe cancellation
 - engine-owned Exact Formula/Technique cache equivalence with explicit bindings
 - KEVIN domain projections and candidate-local filtering
@@ -117,6 +117,8 @@ result strings and cancellation behaviour are specified in
 - [v0.2 release notes and version/ABI policy](docs/release-v0.2.md)
 - [v0.1 release contract (historical)](docs/release-v0.1.md)
 - [Implemented component overview](concepts/README.md)
+- [Flagship-Demo: virtuelle Regelwerte mit Sparse Overrides](docs/lhme-flagship-demo.md)
+- [Virtuelle Tarifzonen: fachliche Anwendungsdemo](docs/lhme-virtual-tariff-demo.md)
 - [Kernel SDK](docs/kernel-sdk.md)
   - [Exact Formula/Technique cache equivalence](docs/kernel-sdk.md#5-exakte-cache-äquivalenz-zwischen-formula-und-technique)
 - [GGUF Inspector V1](docs/gguf-inspector.md)

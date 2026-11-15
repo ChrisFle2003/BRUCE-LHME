@@ -227,6 +227,28 @@ target_link_libraries(lhme_memory_demo PRIVATE bruce_lhme_core)
 if(BUILD_TESTING)
 add_test(NAME lhme_memory_demo COMMAND lhme_memory_demo)
 endif()
+
+add_executable(lhme_flagship_demo demos/lhme/flagship_demo.cpp)
+target_include_directories(lhme_flagship_demo PRIVATE include demos/lhme/support)
+target_link_libraries(lhme_flagship_demo PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
+add_test(
+  NAME lhme_flagship_demo
+  COMMAND lhme_flagship_demo
+    --snapshot ${CMAKE_CURRENT_BINARY_DIR}/lhme-flagship-demo.snapshot
+)
+endif()
+
+add_executable(lhme_virtual_tariff_demo demos/lhme/virtual_tariff_demo.cpp)
+target_include_directories(lhme_virtual_tariff_demo PRIVATE include demos/lhme/support)
+target_link_libraries(lhme_virtual_tariff_demo PRIVATE bruce_lhme_core)
+if(BUILD_TESTING)
+add_test(
+  NAME lhme_virtual_tariff_demo
+  COMMAND lhme_virtual_tariff_demo
+    --snapshot ${CMAKE_CURRENT_BINARY_DIR}/lhme-virtual-tariff-demo.snapshot
+)
+endif()
 endif()
 
 if(BUILD_TESTING OR BRUCE_BUILD_BENCHMARKS)
@@ -412,6 +434,14 @@ add_executable(formula_override_store_tests
 target_include_directories(formula_override_store_tests PRIVATE tests/support include)
 target_link_libraries(formula_override_store_tests PRIVATE bruce_lhme_core)
 add_test(NAME formula_override_store_tests COMMAND formula_override_store_tests)
+
+add_executable(formula_override_streaming_tests
+  tests/support/test_main.cpp
+  tests/formula_override_streaming_tests.cpp
+)
+target_include_directories(formula_override_streaming_tests PRIVATE tests/support include)
+target_link_libraries(formula_override_streaming_tests PRIVATE bruce_lhme_core)
+add_test(NAME formula_override_streaming_tests COMMAND formula_override_streaming_tests)
 
 add_executable(formula_override_snapshot_tests
   tests/support/test_main.cpp
